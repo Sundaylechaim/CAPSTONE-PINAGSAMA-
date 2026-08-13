@@ -8,13 +8,42 @@ TinigSenyas is an interactive capstone project designed to bridge communication 
 - **Local Database:** SQLite integration for seamless translation history tracking.
 - **Accessibility:** Built-in dark mode and adjustable typography scaling.
 
-## Tech Stack
-- **Frontend:** Flutter (Web/Desktop)
-- **Backend:** Python, Flask, OpenCV, MediaPipe
-- **Database:** SQLite
-- 
+## Tech Stack & Dependencies
+
+### Backend Dependencies (Python / Flask)
+Managed via `pip`:
+- **Flask** (Web server framework)
+- **OpenCV-Python** (`opencv-python` - Computer vision and video processing)
+- **MediaPipe** (`mediapipe` - Real-time hand, face, and posture tracking)
+
+### Frontend Dependencies (Flutter / Dart)
+Configured in `pubspec.yaml`:
+- **`flutter`** (SDK Framework)
+- **`speech_to_text`** (^6.6.2 - Browser-native voice transcription)
+- **`sqflite`** (Local SQLite database storage for translation history)
+- **`camera`** (Hardware camera interface)
+- **`vector_math`** (Mathematical operations for UI components)
+
+---
+
+## How to Clone and Run
+
+### Prerequisites
+Make sure you have the following installed on your machine:
+- [Git](https://git-scm.com/)
+- [Python](https://www.python.org/) (with pip)
+- [Flutter SDK](https://flutter.dev/)
+
+### 1. Clone the Repository
+Open your terminal and run:
+```bash
+git clone [https://github.com/Sundaylechaim/TinigSenyas.git](https://github.com/Sundaylechaim/TinigSenyas.git)
+cd tinigsenyas
+-
+
 ## Authors & Project Team
 - **Ambuyo, Joycce Bernadeth** — Thesis Leader
 - **Lagapa, John Laurence** — AI / Data Engineer
 - **Nadonga, Sunday Le'chaim L.** — Mobile Developer
 - **Suarilla, Ynewson** — UI/UX Designer
+
