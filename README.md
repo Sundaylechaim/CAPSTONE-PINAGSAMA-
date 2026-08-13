@@ -2,6 +2,14 @@
 
 TinigSenyas is an interactive capstone project designed to bridge communication gaps for the Filipino deaf and hard-of-hearing community using real-time AI tracking and speech translation.
 
+## Authors & Project Team
+- **Ambuyo, Joycce Bernadeth** — Thesis Leader
+- **Lagapa, John Laurence** — AI / Data Engineer
+- **Nadonga, Sunday Le'chaim L.** — Mobile Developer
+- **Suarilla, Ynewson** — UI/UX Designer
+
+---
+
 ## Key Features
 - **Sign-to-Text:** Real-time computer vision tracking for hand gestures via Python backend and Flask streaming.
 - **Speech-to-Text:** Live browser-native voice transcription rendered into interactive chat bubbles.
@@ -41,9 +49,5 @@ git clone [https://github.com/Sundaylechaim/TinigSenyas.git](https://github.com/
 cd tinigsenyas
 -
 
-## Authors & Project Team
-- **Ambuyo, Joycce Bernadeth** — Thesis Leader
-- **Lagapa, John Laurence** — AI / Data Engineer
-- **Nadonga, Sunday Le'chaim L.** — Mobile Developer
-- **Suarilla, Ynewson** — UI/UX Designer
+
 
