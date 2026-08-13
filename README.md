@@ -47,7 +47,3 @@ Open your terminal and run:
 ```bash
 git clone [https://github.com/Sundaylechaim/TinigSenyas.git](https://github.com/Sundaylechaim/TinigSenyas.git)
 cd tinigsenyas
--
-
-
-
