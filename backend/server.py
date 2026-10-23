@@ -2,9 +2,12 @@ from flask import Flask, Response
 from flask_cors import CORS
 import cv2
 import mediapipe as mp
+from tts_api import tts_api
 
 app = Flask(__name__)
 CORS(app)
+app.register_blueprint(tts_api)
+app.config["MAX_CONTENT_LENGTH"] = 16 * 1024
 
 # Initialize MediaPipe Hands with optimized confidence for motion
 mp_hands = mp.solutions.hands
