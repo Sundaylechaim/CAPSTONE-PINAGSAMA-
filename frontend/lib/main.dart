@@ -8,6 +8,7 @@ import 'services/connectivity_service.dart';
 import 'services/tts_service.dart';
 import 'services/database_helper.dart';
 import 'theme/app_theme.dart';
+import 'screens/landing_page_screen.dart';
 import 'screens/home_screen.dart';
 import 'screens/history_screen.dart';
 import 'screens/speech_to_text_screen.dart';
@@ -70,7 +71,7 @@ class TinigSenyasApp extends StatelessWidget {
               child: child!,
             );
           },
-          home: const MainNavigationScreen(),
+          home: const LandingPageScreen(),
         );
       },
     );
@@ -78,15 +79,23 @@ class TinigSenyasApp extends StatelessWidget {
 }
 
 class MainNavigationScreen extends StatefulWidget {
-  const MainNavigationScreen({super.key});
+  final int initialIndex;
+  const MainNavigationScreen({super.key, this.initialIndex = 0});
 
   @override
   State<MainNavigationScreen> createState() => _MainNavigationScreenState();
 }
 
 class _MainNavigationScreenState extends State<MainNavigationScreen> {
-  int _currentIndex = 0;
-  final Set<int> _visitedTabs = {0};
+  late int _currentIndex;
+  late final Set<int> _visitedTabs;
+
+  @override
+  void initState() {
+    super.initState();
+    _currentIndex = widget.initialIndex;
+    _visitedTabs = {widget.initialIndex};
+  }
 
   Widget _screenForTab(int index) {
     if (!_visitedTabs.contains(index)) return const SizedBox.shrink();
