@@ -10,6 +10,7 @@ from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
 from fastapi import APIRouter, Header, Request as FastAPIRequest, status
+from starlette.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field
 
@@ -51,6 +52,29 @@ def _is_loopback_origin(origin: Optional[str]) -> bool:
         and not parsed_origin.query
         and not parsed_origin.fragment
     )
+
+
+def is_authorized_backend_request(
+    request: FastAPIRequest,
+    authorization: Optional[str],
+    origin: Optional[str],
+) -> bool:
+    expected_token = os.environ.get("TTS_API_TOKEN", "")
+    client_ip = request.client.host if request.client else "127.0.0.1"
+    is_local_client = (
+        client_ip in {"127.0.0.1", "::1"}
+        and _is_loopback_origin(origin)
+    )
+    if is_local_client:
+        return True
+    if expected_token:
+        return hmac.compare_digest(authorization or "", f"Bearer {expected_token}")
+    allowed_origins = {
+        item.strip()
+        for item in os.environ.get("TTS_ALLOWED_ORIGINS", "").split(",")
+        if item.strip()
+    }
+    return origin in allowed_origins
 
 
 def _synthesize_edge_tts_audio(text: str, voice: str, rate: int) -> bytes:
@@ -100,30 +124,10 @@ async def synthesize_speech(
         return JSONResponse(status_code=400, content={"error": "Expected a JSON request body."})
 
     expected_token = os.environ.get("TTS_API_TOKEN", "")
-    supplied_token = authorization or ""
-    
-    # Client IP resolution
-    client_ip = request.client.host if request.client else "127.0.0.1"
-    is_local_client = (
-        client_ip in {"127.0.0.1", "::1"}
-        and _is_loopback_origin(origin)
-    )
-
-    if not is_local_client:
+    if not is_authorized_backend_request(request, authorization, origin):
         if expected_token:
-            if not hmac.compare_digest(
-                supplied_token,
-                f"Bearer {expected_token}",
-            ):
-                return JSONResponse(status_code=401, content={"error": "Unauthorized TTS request."})
-        else:
-            allowed_origins = {
-                item.strip()
-                for item in os.environ.get("TTS_ALLOWED_ORIGINS", "").split(",")
-                if item.strip()
-            }
-            if origin not in allowed_origins:
-                return JSONResponse(status_code=401, content={"error": "A TTS access token is required."})
+            return JSONResponse(status_code=401, content={"error": "Unauthorized TTS request."})
+        return JSONResponse(status_code=401, content={"error": "A TTS access token is required."})
 
     text = payload.get("text")
     voice = payload.get("voice", "fil-PH-BlessicaNeural")
@@ -143,7 +147,9 @@ async def synthesize_speech(
 
     if not speech_key or not _REGION_PATTERN.fullmatch(region):
         try:
-            audio = _synthesize_edge_tts_audio(text, voice, rate)
+            audio = await run_in_threadpool(
+                _synthesize_edge_tts_audio, text, voice, rate
+            )
         except TtsProviderError as error:
             logger.warning("Microsoft Edge TTS request failed: %s", error)
             return JSONResponse(status_code=502, content={"error": "The speech provider is currently unavailable."})

@@ -16,16 +16,11 @@ class CameraPreviewWidget extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (!cameraService.isInitialized || cameraService.controller?.value.isInitialized != true) {
+    if (!cameraService.isInitialized ||
+        cameraService.controller?.value.isInitialized != true) {
       return const Center(child: CircularProgressIndicator());
     }
 
-    return Stack(
-      fit: StackFit.expand,
-      children: [
-        CameraPreview(cameraService.controller!),
-        if (overlay != null) overlay!,
-      ],
-    );
+    return CameraPreview(cameraService.controller!, child: overlay);
   }
 }

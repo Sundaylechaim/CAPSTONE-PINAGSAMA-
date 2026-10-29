@@ -1,14 +1,18 @@
 import 'dart:async';
 import 'dart:ui';
+
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:camera/camera.dart';
 import '../providers/recognition_provider.dart';
 import '../services/camera_service.dart';
+import '../services/recognition/recognition_service.dart';
 import '../services/tts_service.dart';
 import '../services/database_helper.dart';
 import '../models/sign_result.dart';
 import '../widgets/camera_preview.dart';
+import '../widgets/hand_landmark_overlay.dart';
 import '../widgets/prediction_overlay.dart';
 import '../widgets/signing_space_overlay.dart';
 import '../widgets/connectivity_badge.dart';
@@ -33,11 +37,15 @@ class _SignToTextScreenState extends State<SignToTextScreen> {
   bool _isCameraInitialized = false;
   bool _isModelReady = false;
   bool _isProcessingFrame = false;
+  bool _recognitionSetupFailed = false;
   String? _cameraError;
   String? _recognitionError;
+  RecognitionProgress? _recognitionProgress;
   RecognitionProvider? _recognitionProvider;
   StreamSubscription<SignResult>? _predictionSubscription;
+  StreamSubscription<RecognitionProgress>? _progressSubscription;
   StreamSubscription<CameraImage>? _frameSubscription;
+  Timer? _webCaptureTimer;
 
   @override
   void initState() {
@@ -53,6 +61,9 @@ class _SignToTextScreenState extends State<SignToTextScreen> {
           _currentPrediction = prediction;
         });
       }
+    });
+    _progressSubscription = _recognitionProvider!.progress.listen((progress) {
+      if (mounted) setState(() => _recognitionProgress = progress);
     });
     _checkPermissionAndStart();
   }
@@ -93,11 +104,18 @@ class _SignToTextScreenState extends State<SignToTextScreen> {
   }
 
   Future<void> _initializeCamera() async {
+    _recognitionSetupFailed = false;
     try {
       await _cameraService.initialize(direction: CameraLensDirection.front);
-      await _recognitionProvider!.initialize();
-      await _recognitionProvider!.start();
+      try {
+        await _recognitionProvider!.initialize();
+        await _recognitionProvider!.start();
+      } catch (_) {
+        _recognitionSetupFailed = true;
+        rethrow;
+      }
       _isModelReady = _recognitionProvider!.isModelReady;
+      _recognitionSetupFailed = false;
 
       _restartFrameStream();
 
@@ -135,12 +153,42 @@ class _SignToTextScreenState extends State<SignToTextScreen> {
 
   void _restartFrameStream() {
     _frameSubscription?.cancel();
+    _webCaptureTimer?.cancel();
+    if (kIsWeb) {
+      _webCaptureTimer = Timer.periodic(
+        const Duration(milliseconds: 100),
+        (_) => _captureWebFrame(),
+      );
+      return;
+    }
     _frameSubscription = _cameraService.frameStream.listen(
       _processFrame,
       onError: (Object error, StackTrace stackTrace) {
         if (mounted) setState(() => _recognitionError = error.toString());
       },
     );
+  }
+
+  Future<void> _captureWebFrame() async {
+    final controller = _cameraService.controller;
+    if (_isProcessingFrame ||
+        controller == null ||
+        !controller.value.isInitialized ||
+        _recognitionProvider == null) {
+      return;
+    }
+    _isProcessingFrame = true;
+    try {
+      final capture = await controller.takePicture();
+      await _recognitionProvider!.processJpegFrame(await capture.readAsBytes());
+      if (mounted && _recognitionError != null) {
+        setState(() => _recognitionError = null);
+      }
+    } catch (error) {
+      if (mounted) setState(() => _recognitionError = error.toString());
+    } finally {
+      _isProcessingFrame = false;
+    }
   }
 
   Future<void> _switchCamera() async {
@@ -162,9 +210,9 @@ class _SignToTextScreenState extends State<SignToTextScreen> {
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Could not switch camera: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Could not switch camera: $e')));
       }
     }
   }
@@ -190,12 +238,15 @@ class _SignToTextScreenState extends State<SignToTextScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 20,
+                    vertical: 8,
+                  ),
                   child: Text(
                     'Select Camera',
                     style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                          fontWeight: FontWeight.bold,
-                        ),
+                      fontWeight: FontWeight.bold,
+                    ),
                   ),
                 ),
                 const Divider(),
@@ -208,19 +259,24 @@ class _SignToTextScreenState extends State<SignToTextScreen> {
                       cam.lensDirection == CameraLensDirection.front
                           ? Icons.camera_front_rounded
                           : cam.lensDirection == CameraLensDirection.back
-                              ? Icons.camera_rear_rounded
-                              : Icons.videocam_rounded,
+                          ? Icons.camera_rear_rounded
+                          : Icons.videocam_rounded,
                       color: isSelected ? _kAppBlue : null,
                     ),
                     title: Text(
                       CameraService.getCameraDisplayName(cam, index),
                       style: TextStyle(
-                        fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                        fontWeight: isSelected
+                            ? FontWeight.bold
+                            : FontWeight.normal,
                         color: isSelected ? _kAppBlue : null,
                       ),
                     ),
                     trailing: isSelected
-                        ? const Icon(Icons.check_circle_rounded, color: _kAppBlue)
+                        ? const Icon(
+                            Icons.check_circle_rounded,
+                            color: _kAppBlue,
+                          )
                         : null,
                     onTap: () async {
                       Navigator.of(context).pop();
@@ -298,7 +354,9 @@ class _SignToTextScreenState extends State<SignToTextScreen> {
   @override
   void dispose() {
     _predictionSubscription?.cancel();
+    _progressSubscription?.cancel();
     _frameSubscription?.cancel();
+    _webCaptureTimer?.cancel();
     _cameraService.dispose();
     final recognitionProvider = _recognitionProvider;
     if (recognitionProvider != null) unawaited(recognitionProvider.stop());
@@ -458,7 +516,9 @@ class _SignToTextScreenState extends State<SignToTextScreen> {
                   Text(
                     'TinigSenyas needs your camera permission to recognize hand gestures from left to right and translate Filipino Sign Language (FSL) in real-time.',
                     style: theme.textTheme.bodyMedium?.copyWith(
-                      color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B),
+                      color: isDark
+                          ? const Color(0xFF94A3B8)
+                          : const Color(0xFF64748B),
                       height: 1.5,
                     ),
                     textAlign: TextAlign.center,
@@ -476,7 +536,7 @@ class _SignToTextScreenState extends State<SignToTextScreen> {
                   const SizedBox(height: 10),
                   _buildFeatureBullet(
                     Icons.lock_outline_rounded,
-                    'Private: Frames are processed locally on your device',
+                    'Frames are sent to your configured backend for processing',
                   ),
                   const SizedBox(height: 28),
                   if (_isPermanentlyDenied) ...[
@@ -490,11 +550,15 @@ class _SignToTextScreenState extends State<SignToTextScreen> {
                     ),
                     const SizedBox(height: 12),
                     ElevatedButton.icon(
-                      onPressed: () async => await _cameraService.openSettings(),
+                      onPressed: () async =>
+                          await _cameraService.openSettings(),
                       style: ElevatedButton.styleFrom(
                         backgroundColor: _kAppBlue,
                         foregroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 24,
+                          vertical: 14,
+                        ),
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(16),
                         ),
@@ -503,13 +567,18 @@ class _SignToTextScreenState extends State<SignToTextScreen> {
                       icon: const Icon(Icons.settings_rounded),
                       label: const Text(
                         'Open App Settings',
-                        style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                        style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          fontSize: 15,
+                        ),
                       ),
                     ),
                     const SizedBox(height: 10),
                     TextButton(
                       onPressed: _checkPermissionAndStart,
-                      child: const Text('I have allowed permission (Check again)'),
+                      child: const Text(
+                        'I have allowed permission (Check again)',
+                      ),
                     ),
                   ] else ...[
                     ElevatedButton.icon(
@@ -517,7 +586,10 @@ class _SignToTextScreenState extends State<SignToTextScreen> {
                       style: ElevatedButton.styleFrom(
                         backgroundColor: _kAppBlue,
                         foregroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 14),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 28,
+                          vertical: 14,
+                        ),
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(16),
                         ),
@@ -526,7 +598,10 @@ class _SignToTextScreenState extends State<SignToTextScreen> {
                       icon: const Icon(Icons.check_circle_outline_rounded),
                       label: const Text(
                         'Allow Camera Access',
-                        style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                        style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          fontSize: 15,
+                        ),
                       ),
                     ),
                   ],
@@ -563,8 +638,10 @@ class _SignToTextScreenState extends State<SignToTextScreen> {
 
   Widget _buildErrorState() {
     final theme = Theme.of(context);
-    final isPermIssue = _isPermanentlyDenied ||
-        (_cameraError != null && _cameraError!.toLowerCase().contains('permission'));
+    final isPermIssue =
+        _isPermanentlyDenied ||
+        (_cameraError != null &&
+            _cameraError!.toLowerCase().contains('permission'));
 
     return Center(
       child: Padding(
@@ -572,11 +649,21 @@ class _SignToTextScreenState extends State<SignToTextScreen> {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(Icons.error_outline_rounded, size: 56, color: theme.colorScheme.error),
+            Icon(
+              Icons.error_outline_rounded,
+              size: 56,
+              color: theme.colorScheme.error,
+            ),
             const SizedBox(height: 16),
             Text(
-              isPermIssue ? 'Camera Permission Issue' : 'Camera Error',
-              style: theme.textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w800),
+              isPermIssue
+                  ? 'Camera Permission Issue'
+                  : _recognitionSetupFailed
+                  ? 'Recognition Server Unavailable'
+                  : 'Camera Error',
+              style: theme.textTheme.headlineSmall?.copyWith(
+                fontWeight: FontWeight.w800,
+              ),
             ),
             const SizedBox(height: 8),
             Text(
@@ -596,7 +683,11 @@ class _SignToTextScreenState extends State<SignToTextScreen> {
             ElevatedButton.icon(
               onPressed: _initializeCamera,
               icon: const Icon(Icons.refresh_rounded),
-              label: const Text('Retry Camera'),
+              label: Text(
+                _recognitionSetupFailed
+                    ? 'Retry Backend Connection'
+                    : 'Retry Camera',
+              ),
             ),
           ],
         ),
@@ -610,7 +701,18 @@ class _SignToTextScreenState extends State<SignToTextScreen> {
       children: [
         CameraPreviewWidget(
           cameraService: _cameraService,
-          overlay: PredictionOverlay(prediction: _currentPrediction, top: 72),
+          overlay: Stack(
+            fit: StackFit.expand,
+            children: [
+              HandLandmarkOverlay(
+                hands: _recognitionProgress?.handLandmarks ?? const [],
+                frameWidth: _recognitionProgress?.frameWidth ?? 0,
+                frameHeight: _recognitionProgress?.frameHeight ?? 0,
+                mirror: false,
+              ),
+              PredictionOverlay(prediction: _currentPrediction, top: 72),
+            ],
+          ),
         ),
         const SigningSpaceOverlay(),
         Positioned(
@@ -676,7 +778,9 @@ class _SignToTextScreenState extends State<SignToTextScreen> {
                       shape: BoxShape.circle,
                     ),
                     child: Icon(
-                      hasPrediction ? Icons.check_circle_rounded : Icons.radar_rounded,
+                      hasPrediction
+                          ? Icons.check_circle_rounded
+                          : Icons.radar_rounded,
                       color: hasPrediction ? _kAppBlue : Colors.grey,
                       size: 22,
                     ),
@@ -686,9 +790,7 @@ class _SignToTextScreenState extends State<SignToTextScreen> {
                     child: Text(
                       hasPrediction
                           ? 'Recognized: ${_currentPrediction!.label}'
-                          : _isModelReady
-                          ? 'Position hand gestures in frame...'
-                          : 'FSL recognition model is in training',
+                          : 'Move naturally — hand tracking stays live.',
                       style: TextStyle(
                         fontSize: 15,
                         fontWeight: FontWeight.w800,
@@ -698,7 +800,10 @@ class _SignToTextScreenState extends State<SignToTextScreen> {
                   ),
                   if (hasPrediction && _isModelReady)
                     Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 4,
+                      ),
                       decoration: BoxDecoration(
                         color: _kAppYellow,
                         borderRadius: BorderRadius.circular(10),
@@ -742,11 +847,13 @@ class _SignToTextScreenState extends State<SignToTextScreen> {
                   ] else if (!_isModelReady) ...[
                     Expanded(
                       child: Text(
-                        'Camera preview is ready. Sign recognition will be enabled when the trained model is integrated.',
+                        'Connect the recognition backend to start FSL sign detection.',
                         textAlign: TextAlign.center,
                         style: TextStyle(
                           fontSize: 13,
-                          color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B),
+                          color: isDark
+                              ? const Color(0xFF94A3B8)
+                              : const Color(0xFF64748B),
                         ),
                       ),
                     ),
@@ -771,10 +878,7 @@ class _SignToTextScreenState extends State<SignToTextScreen> {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
     final message =
-        _recognitionError ??
-        (_isModelReady
-            ? 'FSL sign recognition is active'
-            : 'FSL sign model is in training');
+        _recognitionError ?? _recognitionStatusMessage(_recognitionProgress);
 
     return ClipRRect(
       borderRadius: BorderRadius.circular(16),
@@ -784,12 +888,12 @@ class _SignToTextScreenState extends State<SignToTextScreen> {
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
           decoration: BoxDecoration(
             color: _recognitionError == null
-                ? (isDark ? const Color(0xFF0C1220).withValues(alpha: 0.75) : Colors.white.withValues(alpha: 0.85))
+                ? (isDark
+                      ? const Color(0xFF0C1220).withValues(alpha: 0.75)
+                      : Colors.white.withValues(alpha: 0.85))
                 : Colors.redAccent.withValues(alpha: 0.85),
             borderRadius: BorderRadius.circular(16),
-            border: Border.all(
-              color: isDark ? Colors.white12 : Colors.white60,
-            ),
+            border: Border.all(color: isDark ? Colors.white12 : Colors.white60),
           ),
           child: Row(
             children: [
@@ -819,7 +923,10 @@ class _SignToTextScreenState extends State<SignToTextScreen> {
                   onTap: _showCameraPicker,
                   borderRadius: BorderRadius.circular(8),
                   child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 4,
+                    ),
                     decoration: BoxDecoration(
                       color: _kAppBlue.withValues(alpha: 0.15),
                       borderRadius: BorderRadius.circular(8),
@@ -827,7 +934,11 @@ class _SignToTextScreenState extends State<SignToTextScreen> {
                     child: const Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        Icon(Icons.cameraswitch_rounded, size: 14, color: _kAppBlue),
+                        Icon(
+                          Icons.cameraswitch_rounded,
+                          size: 14,
+                          color: _kAppBlue,
+                        ),
                         SizedBox(width: 4),
                         Text(
                           'Switch',
@@ -847,6 +958,35 @@ class _SignToTextScreenState extends State<SignToTextScreen> {
         ),
       ),
     );
+  }
+
+  String _recognitionStatusMessage(RecognitionProgress? progress) {
+    if (!_isModelReady) return 'Connecting to the FSL recognition backend...';
+    if (progress == null) {
+      return 'Recognition is ready. Show a hand to the camera.';
+    }
+    switch (progress.status) {
+      case 'idle':
+        return 'No hand detected. Keep your hand visible in the camera view.';
+      case 'collecting':
+        return 'Hand tracked — reading sign '
+            '(${progress.framesCollected}/${progress.sequenceLength} frames).';
+      case 'uncertain':
+        final confidence = progress.confidence;
+        return confidence == null
+            ? 'Sign detected, but the result is uncertain. Hold it steady.'
+            : 'Uncertain sign (${(confidence * 100).toStringAsFixed(1)}%). '
+                  'Hold it steady and try again.';
+      case 'recognized':
+        final label = progress.label ?? 'Sign';
+        final confidence = progress.confidence;
+        return confidence == null
+            ? 'Recognized: $label'
+            : 'Recognized: $label '
+                  '(${(confidence * 100).toStringAsFixed(1)}%).';
+      default:
+        return 'Recognition is ready. Show a hand to the camera.';
+    }
   }
 
   void _showGuide() {
@@ -870,7 +1010,9 @@ class _SignToTextScreenState extends State<SignToTextScreen> {
                   color: isDark
                       ? const Color(0xFF0E1626).withValues(alpha: 0.95)
                       : Colors.white.withValues(alpha: 0.95),
-                  borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
+                  borderRadius: const BorderRadius.vertical(
+                    top: Radius.circular(28),
+                  ),
                 ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -890,7 +1032,10 @@ class _SignToTextScreenState extends State<SignToTextScreen> {
                       children: [
                         const Text(
                           'FSL Signing Guide',
-                          style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900),
+                          style: TextStyle(
+                            fontSize: 20,
+                            fontWeight: FontWeight.w900,
+                          ),
                         ),
                         const SizedBox(width: 5),
                         Container(
@@ -909,14 +1054,35 @@ class _SignToTextScreenState extends State<SignToTextScreen> {
                         controller: scrollController,
                         physics: const BouncingScrollPhysics(),
                         children: const [
-                          _GuideItem('HELLO', 'Wave hand near face with a friendly smile'),
-                          _GuideItem('THANK YOU', 'Touch chin with fingers, move hand forward'),
+                          _GuideItem(
+                            'HELLO',
+                            'Wave hand near face with a friendly smile',
+                          ),
+                          _GuideItem(
+                            'THANK YOU',
+                            'Touch chin with fingers, move hand forward',
+                          ),
                           _GuideItem('YES', 'Closed fist nodding up and down'),
-                          _GuideItem('NO', 'Index and middle finger snap to thumb'),
-                          _GuideItem('PLEASE', 'Open flat palm rubbed circular on chest'),
-                          _GuideItem('SORRY', 'Closed fist rubbed circular on chest'),
-                          _GuideItem('GOOD', 'Thumb up gesture moving outward from chin'),
-                          _GuideItem('BAD', 'Thumb down gesture moving outward from chin'),
+                          _GuideItem(
+                            'NO',
+                            'Index and middle finger snap to thumb',
+                          ),
+                          _GuideItem(
+                            'PLEASE',
+                            'Open flat palm rubbed circular on chest',
+                          ),
+                          _GuideItem(
+                            'SORRY',
+                            'Closed fist rubbed circular on chest',
+                          ),
+                          _GuideItem(
+                            'GOOD',
+                            'Thumb up gesture moving outward from chin',
+                          ),
+                          _GuideItem(
+                            'BAD',
+                            'Thumb down gesture moving outward from chin',
+                          ),
                         ],
                       ),
                     ),
@@ -962,9 +1128,7 @@ class _ActionButton extends StatelessWidget {
                 borderRadius: BorderRadius.circular(16),
                 border: Border.all(color: color.withValues(alpha: 0.4)),
               ),
-              child: Center(
-                child: Icon(icon, color: color, size: 24),
-              ),
+              child: Center(child: Icon(icon, color: color, size: 24)),
             ),
           ),
         ),

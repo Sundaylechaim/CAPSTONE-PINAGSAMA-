@@ -1,4 +1,6 @@
 import 'dart:async';
+import 'dart:typed_data';
+
 import 'package:camera/camera.dart';
 import 'package:tinigsenyas/models/sign_result.dart';
 import 'recognition_service.dart';
@@ -55,7 +57,15 @@ class MockRecognitionService implements RecognitionService {
   }
 
   @override
+  Future<void> processJpegFrame(Uint8List bytes) async {
+    // Mock doesn't process frames
+  }
+
+  @override
   Stream<SignResult> get predictions => _predictionsController.stream;
+
+  @override
+  Stream<RecognitionProgress> get progress => const Stream.empty();
 
   @override
   void dispose() {

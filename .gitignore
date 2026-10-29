@@ -1,0 +1,14 @@
+﻿**/.git/
+**/.venv/
+**/.venv-1/
+**/venv/
+**/node_modules/
+**/.pytest_cache/
+**/build/
+**/.dart_tool/
+**/.gradle/
+**/raw_videos/
+**/datasets/
+**/__pycache__/
+**/*.pyc
+**/.vscode/

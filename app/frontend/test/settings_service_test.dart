@@ -93,6 +93,15 @@ void main() {
       expect(await settings.getTtsServerToken(), 'test-access-token');
     });
 
+    test(
+      'accepts a private LAN backend URL for local device testing',
+      () async {
+        await settings.setTtsServer(url: 'http://192.168.1.25:5000', token: '');
+
+        expect(settings.ttsServerUrl, 'http://192.168.1.25:5000');
+      },
+    );
+
     test('does not require an online server for non-web defaults', () {
       expect(settings.ttsServerUrl, isEmpty);
     });

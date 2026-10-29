@@ -128,11 +128,7 @@ class SettingsService extends ChangeNotifier {
           parsedUrl.hasFragment ||
           !const {'http', 'https'}.contains(parsedUrl.scheme) ||
           (parsedUrl.scheme == 'http' &&
-              !const {
-                'localhost',
-                '127.0.0.1',
-                '10.0.2.2',
-              }.contains(parsedUrl.host))) {
+              !_isLocalNetworkHost(parsedUrl.host))) {
         throw ArgumentError.value(
           url,
           'url',
@@ -150,6 +146,23 @@ class SettingsService extends ChangeNotifier {
         value: normalizedToken,
       );
     }
+  }
+
+  static bool _isLocalNetworkHost(String host) {
+    if (host == 'localhost' || host == '::1') return true;
+    final octets = host.split('.');
+    if (octets.length != 4) return false;
+    final address = <int>[];
+    for (final octet in octets) {
+      final value = int.tryParse(octet);
+      if (value == null || value < 0 || value > 255) return false;
+      address.add(value);
+    }
+
+    return address[0] == 10 ||
+        address[0] == 127 ||
+        (address[0] == 172 && address[1] >= 16 && address[1] <= 31) ||
+        (address[0] == 192 && address[1] == 168);
   }
 
   String get ttsOnlineVoice =>

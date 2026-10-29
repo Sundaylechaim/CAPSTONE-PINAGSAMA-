@@ -32,7 +32,7 @@ function Test-BackendDependencies {
         -Force -ErrorAction SilentlyContinue
     $checkProcess = Start-Process `
         -FilePath $backendPython `
-        -ArgumentList '-c', '"import cv2,edge_tts,fastapi,uvicorn,mediapipe as mp; mp.solutions.hands.Hands()"' `
+        -ArgumentList '-c', '"import cv2,edge_tts,fastapi,uvicorn,mediapipe as mp; from ai_edge_litert.interpreter import Interpreter; mp.solutions.hands.Hands()"' `
         -WorkingDirectory $backendPath `
         -PassThru `
         -Wait `

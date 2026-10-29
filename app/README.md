@@ -11,26 +11,26 @@ TinigSenyas is an interactive capstone project designed to bridge communication 
 ---
 
 ## Key Features
-- **Sign-to-Text:** Real-time computer vision tracking for hand gestures via Python backend and Flask streaming.
+- **Sign-to-Text:** Real-time FSL recognition using the trained TFLite model with MediaPipe pose and hand landmarks in the FastAPI backend.
 - **Speech-to-Text:** Live browser-native voice transcription rendered into interactive chat bubbles.
 - **Local Database:** SQLite integration for seamless translation history tracking.
 - **Accessibility:** Built-in dark mode and adjustable typography scaling.
 
 ## Tech Stack & Dependencies
 
-### Backend Dependencies (Python / Flask)
+### Backend Dependencies (Python / FastAPI)
 Managed via `pip`:
-- **Flask** (Web server framework)
-- **OpenCV-Python** (`opencv-python` - Computer vision and video processing)
-- **MediaPipe** (`mediapipe` - Real-time hand, face, and posture tracking)
+- **FastAPI** and **Uvicorn** (Web API and ASGI server)
+- **OpenCV** and **MediaPipe** (Frame decoding and pose/hand landmarks)
+- **LiteRT** (`ai-edge-litert` - Trained TFLite model inference)
 
 ### Frontend Dependencies (Flutter / Dart)
 Configured in `pubspec.yaml`:
 - **`flutter`** (SDK Framework)
-- **`speech_to_text`** (^6.6.2 - Browser-native voice transcription)
+- **`camera`** (Camera capture)
+- **`image`** (JPEG frame encoding)
+- **`dio`** (Backend requests)
 - **`sqflite`** (Local SQLite database storage for translation history)
-- **`camera`** (Hardware camera interface)
-- **`vector_math`** (Mathematical operations for UI components)
 
 ---
 

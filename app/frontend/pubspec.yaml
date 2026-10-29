@@ -31,6 +31,7 @@ dependencies:
   flutter_tts: ^4.2.5
   share_plus: ^13.3.1
   audioplayers: ^6.8.1
+  image: ^4.5.4
   flutter_secure_storage: ^11.2.0
   sherpa_onnx: ^1.13.8
   archive: ^4.5.2

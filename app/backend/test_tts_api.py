@@ -83,6 +83,46 @@ class TtsApiTests(unittest.TestCase):
             10,
         )
 
+    def test_runs_edge_tts_outside_the_fastapi_event_loop(self):
+        async def fake_stream():
+            yield {"type": "audio", "data": b"edge-mp3"}
+
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "TTS_API_TOKEN": "",
+                    "AZURE_SPEECH_KEY": "",
+                    "AZURE_SPEECH_REGION": "",
+                },
+            ),
+            patch("edge_tts.Communicate") as communicate,
+        ):
+            communicate.return_value.stream.return_value = fake_stream()
+            client = TestClient(
+                self.app,
+                base_url="http://testserver",
+                client=("127.0.0.1", 50000),
+                raise_server_exceptions=False,
+            )
+            response = client.post(
+                "/tts/synthesize",
+                json={
+                    "text": "Kumusta",
+                    "voice": "fil-PH-BlessicaNeural",
+                    "rate": 0,
+                },
+            )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.headers.get("content-type"), "audio/mpeg")
+        self.assertEqual(response.content, b"edge-mp3")
+        communicate.assert_called_once_with(
+            "Kumusta",
+            "fil-PH-BlessicaNeural",
+            rate="+0%",
+        )
+
     def test_requires_token_for_nonlocal_clients_without_server_token(self):
         with patch.dict(os.environ, {"TTS_API_TOKEN": ""}):
             client = TestClient(self.app, client=("192.0.2.25", 50000))

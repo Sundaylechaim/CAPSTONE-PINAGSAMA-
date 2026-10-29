@@ -1,5 +1,7 @@
+import 'dart:async';
 import 'dart:ui';
 import 'dart:io';
+import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
@@ -11,9 +13,6 @@ import '../services/database_helper.dart';
 import '../services/tts_service.dart';
 import '../widgets/connectivity_badge.dart';
 import 'landing_page_screen.dart';
-import '../services/model_updater.dart';
-import '../widgets/model_update_dialog.dart';
-
 
 const Color _kAppBlue = Color(0xFF0138FF);
 const Color _kAppYellow = Color(0xFFFFC801);
@@ -34,12 +33,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
   String _ttsOnlineVoice = 'fil-PH-BlessicaNeural';
   String _ttsOfflineEnglishVoice = 'af_maple';
   String _ttsServerUrl = '';
-  String _modelVersion = 'Not installed';
+  String _modelVersion = 'Backend not checked';
   List<Map<String, String>> _ttsVoices = [];
   Map<String, String>? _selectedTtsVoice;
   bool _isLoadingVoices = true;
   bool _offlineEnglishVoiceInstalled = false;
   bool _isInstallingOfflineEnglishVoice = false;
+  bool _isCheckingModel = false;
   double? _offlineVoiceDownloadProgress;
 
   @override
@@ -57,7 +57,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _ttsOnlineVoice = _settingsService.ttsOnlineVoice;
     _ttsOfflineEnglishVoice = _settingsService.ttsOfflineEnglishVoice;
     _ttsServerUrl = _settingsService.ttsServerUrl;
-    _modelVersion = _settingsService.modelVersion;
+    unawaited(_refreshModelStatus(showError: false));
 
     try {
       final ttsService = context.read<TtsService>();
@@ -86,6 +86,51 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
+  Future<void> _refreshModelStatus({bool showError = true}) async {
+    final serverUrl = _settingsService.ttsServerUrl.trim().replaceFirst(
+      RegExp(r'/+$'),
+      '',
+    );
+    if (serverUrl.isEmpty) {
+      if (mounted) setState(() => _modelVersion = 'Configure backend URL');
+      return;
+    }
+
+    if (mounted) setState(() => _isCheckingModel = true);
+    final dio = Dio(
+      BaseOptions(
+        connectTimeout: const Duration(seconds: 5),
+        receiveTimeout: const Duration(seconds: 15),
+      ),
+    );
+    try {
+      final response = await dio.get<Map<String, dynamic>>(
+        '$serverUrl/api/v1/recognition/status',
+      );
+      final data = response.data;
+      final modelVersion = data?['model_version'];
+      final classCount = data?['class_count'];
+      if (data?['ready'] != true ||
+          modelVersion is! String ||
+          classCount is! int) {
+        throw StateError('The backend did not report a ready FSL model.');
+      }
+      if (mounted) {
+        setState(
+          () => _modelVersion = 'v$modelVersion · $classCount signs (backend)',
+        );
+      }
+    } catch (error) {
+      if (mounted) setState(() => _modelVersion = 'Backend unavailable');
+      if (showError) {
+        _showError('Could not check the backend FSL model: $error');
+      }
+    } finally {
+      dio.close();
+      if (mounted) setState(() => _isCheckingModel = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final themeProvider = context.watch<ThemeProvider>();
@@ -94,7 +139,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
         .toList();
     final hasLanguageVoice = languageVoices.isNotEmpty;
 
-    final isDark = themeProvider.themeMode == ThemeMode.dark ||
+    final isDark =
+        themeProvider.themeMode == ThemeMode.dark ||
         (themeProvider.themeMode == ThemeMode.system &&
             MediaQuery.of(context).platformBrightness == Brightness.dark);
     final bgColor = isDark ? const Color(0xFF090E1A) : const Color(0xFFF1F5F9);
@@ -148,10 +194,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
           ],
         ),
-        actions: const [
-          ConnectivityBadge(),
-          SizedBox(width: 14),
-        ],
+        actions: const [ConnectivityBadge(), SizedBox(width: 14)],
       ),
       body: Stack(
         children: [
@@ -198,438 +241,459 @@ class _SettingsScreenState extends State<SettingsScreen> {
               physics: const BouncingScrollPhysics(),
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
               children: [
-          // Theme Section
-          _SectionHeader('Appearance'),
-          _SettingsTile(
-            title: 'Dark Mode',
-            subtitle: 'Choose theme',
-            trailing: DropdownButton<ThemeMode>(
-              value: themeProvider.themeMode,
-              items: const [
-                DropdownMenuItem(
-                  value: ThemeMode.system,
-                  child: Text('System'),
-                ),
-                DropdownMenuItem(value: ThemeMode.light, child: Text('Light')),
-                DropdownMenuItem(value: ThemeMode.dark, child: Text('Dark')),
-              ],
-              onChanged: (value) {
-                if (value != null) {
-                  themeProvider.setThemeMode(value);
-                }
-              },
-              underline: const SizedBox(),
-            ),
-          ),
-          _SettingsTile(
-            title: 'Text Size',
-            subtitle: 'Adjust text scaling',
-            trailing: SizedBox(
-              width: 150,
-              child: Slider(
-                value: _textScale,
-                min: 0.8,
-                max: 1.4,
-                divisions: 6,
-                label: '${(_textScale * 100).toInt()}%',
-                onChanged: (value) async {
-                  setState(() => _textScale = value);
-                  await _settingsService.setTextScaleFactor(value);
-                },
-              ),
-            ),
-          ),
-
-          const SizedBox(height: 24),
-          // TTS Section
-          _SectionHeader('Text-to-Speech'),
-          _SettingsTile(
-            title: 'Language',
-            subtitle: 'TTS voice language',
-            trailing: DropdownButton<String>(
-              value: _ttsLanguage,
-              items: const [
-                DropdownMenuItem(
-                  value: 'en-PH',
-                  child: Text('English (Philippines)'),
-                ),
-                DropdownMenuItem(value: 'en-US', child: Text('English (US)')),
-                DropdownMenuItem(value: 'en-GB', child: Text('English (UK)')),
-                DropdownMenuItem(value: 'fil-PH', child: Text('Filipino')),
-              ],
-              onChanged: (value) async {
-                if (value != null) {
-                  setState(() => _ttsLanguage = value);
-                  final ttsService = context.read<TtsService>();
-                  try {
-                    if (_ttsSource == 'offline_english' &&
-                        value.toLowerCase() != 'en-us') {
-                      await _settingsService.setTtsSource('offline');
-                      if (mounted) setState(() => _ttsSource = 'offline');
-                    }
-                    await ttsService.setLanguage(value);
-                    if (mounted) {
-                      setState(
-                        () => _selectedTtsVoice = _settingsService.ttsVoice,
-                      );
-                    }
-                  } catch (error) {
-                    if (mounted) {
-                      setState(
-                        () => _ttsLanguage = _settingsService.ttsLanguage,
-                      );
-                    }
-                    _showError('Could not change voice language: $error');
-                  }
-                }
-              },
-              underline: const SizedBox(),
-            ),
-          ),
-          _SettingsTile(
-            title: 'Voice source',
-            subtitle: switch (_ttsSource) {
-              'online' => 'Microsoft online voice; text is sent to Microsoft',
-              'offline_english' => 'Offline English neural female voice',
-              'offline' => 'Installed device voice only',
-              _
-                  when _ttsLanguage.toLowerCase().startsWith('fil') &&
-                      _ttsServerUrl.isNotEmpty =>
-                'Microsoft online Filipino voice; text is sent to Microsoft',
-              _ when _ttsLanguage.toLowerCase().startsWith('fil') =>
-                'Using device voice; configure the server for Filipino neural '
-                    'speech',
-              _ => 'Use online when configured, then try the device voice',
-            },
-            trailing: DropdownButton<String>(
-              value: _ttsSource,
-              items: [
-                const DropdownMenuItem(
-                  value: 'automatic',
-                  child: Text('Automatic'),
-                ),
-                const DropdownMenuItem(value: 'online', child: Text('Online')),
-                const DropdownMenuItem(
-                  value: 'offline',
-                  child: Text('Offline'),
-                ),
-                if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android)
-                  const DropdownMenuItem(
-                    value: 'offline_english',
-                    child: Text('English female'),
+                // Theme Section
+                _SectionHeader('Appearance'),
+                _SettingsTile(
+                  title: 'Dark Mode',
+                  subtitle: 'Choose theme',
+                  trailing: DropdownButton<ThemeMode>(
+                    value: themeProvider.themeMode,
+                    items: const [
+                      DropdownMenuItem(
+                        value: ThemeMode.system,
+                        child: Text('System'),
+                      ),
+                      DropdownMenuItem(
+                        value: ThemeMode.light,
+                        child: Text('Light'),
+                      ),
+                      DropdownMenuItem(
+                        value: ThemeMode.dark,
+                        child: Text('Dark'),
+                      ),
+                    ],
+                    onChanged: (value) {
+                      if (value != null) {
+                        themeProvider.setThemeMode(value);
+                      }
+                    },
+                    underline: const SizedBox(),
                   ),
-              ],
-              onChanged: (value) async {
-                if (value == null) return;
-                if (value == 'offline_english' &&
-                    _ttsLanguage.toLowerCase() != 'en-us') {
-                  _showError(
-                    'Select English (US) before choosing the offline English voice.',
-                  );
-                  return;
-                }
-                try {
-                  await _settingsService.setTtsSource(value);
-                  if (mounted) setState(() => _ttsSource = value);
-                } catch (error) {
-                  _showError('Could not change voice source: $error');
-                }
-              },
-              underline: const SizedBox(),
-            ),
-          ),
-          if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android)
-            _SettingsTile(
-              title: 'Offline English female voice',
-              subtitle: _offlineEnglishVoiceInstalled
-                  ? 'Ready offline. Select English (US) to use it.'
-                  : '147 MB download; keep about 350 MB free. English only.',
-              trailing: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  SizedBox(
-                    width: 130,
-                    child: DropdownButton<String>(
-                      isExpanded: true,
-                      value: _ttsOfflineEnglishVoice,
-                      items: const [
-                        DropdownMenuItem(
-                          value: 'af_maple',
-                          child: Text('Maple · Female'),
-                        ),
-                        DropdownMenuItem(
-                          value: 'af_sol',
-                          child: Text('Sol · Female'),
-                        ),
-                        DropdownMenuItem(
-                          value: 'bf_vale',
-                          child: Text('Vale · Female · UK'),
-                        ),
-                      ],
-                      onChanged: (voice) async {
-                        if (voice == null) return;
+                ),
+                _SettingsTile(
+                  title: 'Text Size',
+                  subtitle: 'Adjust text scaling',
+                  trailing: SizedBox(
+                    width: 150,
+                    child: Slider(
+                      value: _textScale,
+                      min: 0.8,
+                      max: 1.4,
+                      divisions: 6,
+                      label: '${(_textScale * 100).toInt()}%',
+                      onChanged: (value) async {
+                        setState(() => _textScale = value);
+                        await _settingsService.setTextScaleFactor(value);
+                      },
+                    ),
+                  ),
+                ),
+
+                const SizedBox(height: 24),
+                // TTS Section
+                _SectionHeader('Text-to-Speech'),
+                _SettingsTile(
+                  title: 'Language',
+                  subtitle: 'TTS voice language',
+                  trailing: DropdownButton<String>(
+                    value: _ttsLanguage,
+                    items: const [
+                      DropdownMenuItem(
+                        value: 'en-PH',
+                        child: Text('English (Philippines)'),
+                      ),
+                      DropdownMenuItem(
+                        value: 'en-US',
+                        child: Text('English (US)'),
+                      ),
+                      DropdownMenuItem(
+                        value: 'en-GB',
+                        child: Text('English (UK)'),
+                      ),
+                      DropdownMenuItem(
+                        value: 'fil-PH',
+                        child: Text('Filipino'),
+                      ),
+                    ],
+                    onChanged: (value) async {
+                      if (value != null) {
+                        setState(() => _ttsLanguage = value);
+                        final ttsService = context.read<TtsService>();
                         try {
-                          await _settingsService.setTtsOfflineEnglishVoice(
-                            voice,
-                          );
+                          if (_ttsSource == 'offline_english' &&
+                              value.toLowerCase() != 'en-us') {
+                            await _settingsService.setTtsSource('offline');
+                            if (mounted) setState(() => _ttsSource = 'offline');
+                          }
+                          await ttsService.setLanguage(value);
                           if (mounted) {
-                            setState(() => _ttsOfflineEnglishVoice = voice);
+                            setState(
+                              () =>
+                                  _selectedTtsVoice = _settingsService.ttsVoice,
+                            );
                           }
                         } catch (error) {
-                          _showError('Could not change English voice: $error');
+                          if (mounted) {
+                            setState(
+                              () => _ttsLanguage = _settingsService.ttsLanguage,
+                            );
+                          }
+                          _showError('Could not change voice language: $error');
+                        }
+                      }
+                    },
+                    underline: const SizedBox(),
+                  ),
+                ),
+                _SettingsTile(
+                  title: 'Voice source',
+                  subtitle: switch (_ttsSource) {
+                    'online' =>
+                      'Microsoft online voice; text is sent to Microsoft',
+                    'offline_english' => 'Offline English neural female voice',
+                    'offline' => 'Installed device voice only',
+                    _
+                        when _ttsLanguage.toLowerCase().startsWith('fil') &&
+                            _ttsServerUrl.isNotEmpty =>
+                      'Microsoft online Filipino voice; text is sent to Microsoft',
+                    _ when _ttsLanguage.toLowerCase().startsWith('fil') =>
+                      'Using device voice; configure the server for Filipino neural '
+                          'speech',
+                    _ =>
+                      'Use online when configured, then try the device voice',
+                  },
+                  trailing: DropdownButton<String>(
+                    value: _ttsSource,
+                    items: [
+                      const DropdownMenuItem(
+                        value: 'automatic',
+                        child: Text('Automatic'),
+                      ),
+                      const DropdownMenuItem(
+                        value: 'online',
+                        child: Text('Online'),
+                      ),
+                      const DropdownMenuItem(
+                        value: 'offline',
+                        child: Text('Offline'),
+                      ),
+                      if (!kIsWeb &&
+                          defaultTargetPlatform == TargetPlatform.android)
+                        const DropdownMenuItem(
+                          value: 'offline_english',
+                          child: Text('English female'),
+                        ),
+                    ],
+                    onChanged: (value) async {
+                      if (value == null) return;
+                      if (value == 'offline_english' &&
+                          _ttsLanguage.toLowerCase() != 'en-us') {
+                        _showError(
+                          'Select English (US) before choosing the offline English voice.',
+                        );
+                        return;
+                      }
+                      try {
+                        await _settingsService.setTtsSource(value);
+                        if (mounted) setState(() => _ttsSource = value);
+                      } catch (error) {
+                        _showError('Could not change voice source: $error');
+                      }
+                    },
+                    underline: const SizedBox(),
+                  ),
+                ),
+                if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android)
+                  _SettingsTile(
+                    title: 'Offline English female voice',
+                    subtitle: _offlineEnglishVoiceInstalled
+                        ? 'Ready offline. Select English (US) to use it.'
+                        : '147 MB download; keep about 350 MB free. English only.',
+                    trailing: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        SizedBox(
+                          width: 130,
+                          child: DropdownButton<String>(
+                            isExpanded: true,
+                            value: _ttsOfflineEnglishVoice,
+                            items: const [
+                              DropdownMenuItem(
+                                value: 'af_maple',
+                                child: Text('Maple · Female'),
+                              ),
+                              DropdownMenuItem(
+                                value: 'af_sol',
+                                child: Text('Sol · Female'),
+                              ),
+                              DropdownMenuItem(
+                                value: 'bf_vale',
+                                child: Text('Vale · Female · UK'),
+                              ),
+                            ],
+                            onChanged: (voice) async {
+                              if (voice == null) return;
+                              try {
+                                await _settingsService
+                                    .setTtsOfflineEnglishVoice(voice);
+                                if (mounted) {
+                                  setState(
+                                    () => _ttsOfflineEnglishVoice = voice,
+                                  );
+                                }
+                              } catch (error) {
+                                _showError(
+                                  'Could not change English voice: $error',
+                                );
+                              }
+                            },
+                            underline: const SizedBox(),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        if (_isInstallingOfflineEnglishVoice)
+                          SizedBox(
+                            width: 72,
+                            child: LinearProgressIndicator(
+                              value: _offlineVoiceDownloadProgress,
+                            ),
+                          )
+                        else
+                          TextButton(
+                            onPressed: _offlineEnglishVoiceInstalled
+                                ? null
+                                : _installOfflineEnglishVoice,
+                            child: Text(
+                              _offlineEnglishVoiceInstalled
+                                  ? 'Installed'
+                                  : 'Download',
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                _SettingsTile(
+                  title: 'Filipino speech service',
+                  subtitle: _ttsServerUrl.isEmpty
+                      ? 'Not configured'
+                      : 'Using $_ttsServerUrl',
+                  trailing: TextButton(
+                    onPressed: _configureOnlineTts,
+                    child: const Text('Advanced'),
+                  ),
+                ),
+                if (_ttsLanguage.toLowerCase().startsWith('fil'))
+                  _SettingsTile(
+                    title: 'Online Filipino voice',
+                    subtitle: 'Female and male neural voices',
+                    trailing: DropdownButton<String>(
+                      value: _ttsOnlineVoice,
+                      items: const [
+                        DropdownMenuItem(
+                          value: 'fil-PH-BlessicaNeural',
+                          child: Text('Blessica · Female'),
+                        ),
+                        DropdownMenuItem(
+                          value: 'fil-PH-AngeloNeural',
+                          child: Text('Angelo · Male'),
+                        ),
+                      ],
+                      onChanged: (value) async {
+                        if (value == null) return;
+                        try {
+                          await _settingsService.setTtsOnlineVoice(value);
+                          if (mounted) setState(() => _ttsOnlineVoice = value);
+                        } catch (error) {
+                          _showError('Could not change online voice: $error');
                         }
                       },
                       underline: const SizedBox(),
                     ),
                   ),
-                  const SizedBox(width: 8),
-                  if (_isInstallingOfflineEnglishVoice)
-                    SizedBox(
-                      width: 72,
-                      child: LinearProgressIndicator(
-                        value: _offlineVoiceDownloadProgress,
-                      ),
-                    )
-                  else
-                    TextButton(
-                      onPressed: _offlineEnglishVoiceInstalled
-                          ? null
-                          : _installOfflineEnglishVoice,
-                      child: Text(
-                        _offlineEnglishVoiceInstalled
-                            ? 'Installed'
-                            : 'Download',
-                      ),
-                    ),
-                ],
-              ),
-            ),
-          _SettingsTile(
-            title: 'Filipino speech service',
-            subtitle: _ttsServerUrl.isEmpty
-                ? 'Not configured'
-                : 'Using $_ttsServerUrl',
-            trailing: TextButton(
-              onPressed: _configureOnlineTts,
-              child: const Text('Advanced'),
-            ),
-          ),
-          if (_ttsLanguage.toLowerCase().startsWith('fil'))
-            _SettingsTile(
-              title: 'Online Filipino voice',
-              subtitle: 'Female and male neural voices',
-              trailing: DropdownButton<String>(
-                value: _ttsOnlineVoice,
-                items: const [
-                  DropdownMenuItem(
-                    value: 'fil-PH-BlessicaNeural',
-                    child: Text('Blessica · Female'),
-                  ),
-                  DropdownMenuItem(
-                    value: 'fil-PH-AngeloNeural',
-                    child: Text('Angelo · Male'),
-                  ),
-                ],
-                onChanged: (value) async {
-                  if (value == null) return;
-                  try {
-                    await _settingsService.setTtsOnlineVoice(value);
-                    if (mounted) setState(() => _ttsOnlineVoice = value);
-                  } catch (error) {
-                    _showError('Could not change online voice: $error');
-                  }
-                },
-                underline: const SizedBox(),
-              ),
-            ),
-          _SettingsTile(
-            title: 'Voice',
-            subtitle: _isLoadingVoices
-                ? 'Loading device voices...'
-                : !hasLanguageVoice
-                ? _ttsServerUrl.isNotEmpty &&
-                          _ttsLanguage.toLowerCase().startsWith('fil')
-                      ? 'No local Filipino voice; online Filipino speech is available'
-                      : 'No ${_ttsLanguageName(_ttsLanguage)} voice is installed. Add its speech data in device or browser settings.'
-                : 'Female voice selected automatically when the device identifies one',
-            trailing: _isLoadingVoices
-                ? const SizedBox(
-                    width: 24,
-                    height: 24,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : SizedBox(
-                    width: 180,
-                    child: DropdownButton<String>(
-                      isExpanded: true,
-                      value: _selectedTtsVoice == null
-                          ? ''
-                          : _voiceKey(_selectedTtsVoice!),
-                      items: [
-                        const DropdownMenuItem(
-                          value: '',
-                          child: Text('Automatic'),
-                        ),
-                        ...languageVoices.map(
-                          (voice) => DropdownMenuItem(
-                            value: _voiceKey(voice),
-                            child: Text(
-                              _voiceLabel(voice),
-                              overflow: TextOverflow.ellipsis,
-                            ),
+                _SettingsTile(
+                  title: 'Voice',
+                  subtitle: _isLoadingVoices
+                      ? 'Loading device voices...'
+                      : !hasLanguageVoice
+                      ? _ttsServerUrl.isNotEmpty &&
+                                _ttsLanguage.toLowerCase().startsWith('fil')
+                            ? 'No local Filipino voice; online Filipino speech is available'
+                            : 'No ${_ttsLanguageName(_ttsLanguage)} voice is installed. Add its speech data in device or browser settings.'
+                      : 'Female voice selected automatically when the device identifies one',
+                  trailing: _isLoadingVoices
+                      ? const SizedBox(
+                          width: 24,
+                          height: 24,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : SizedBox(
+                          width: 180,
+                          child: DropdownButton<String>(
+                            isExpanded: true,
+                            value: _selectedTtsVoice == null
+                                ? ''
+                                : _voiceKey(_selectedTtsVoice!),
+                            items: [
+                              const DropdownMenuItem(
+                                value: '',
+                                child: Text('Automatic'),
+                              ),
+                              ...languageVoices.map(
+                                (voice) => DropdownMenuItem(
+                                  value: _voiceKey(voice),
+                                  child: Text(
+                                    _voiceLabel(voice),
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                              ),
+                            ],
+                            onChanged: !hasLanguageVoice
+                                ? null
+                                : _selectTtsVoice,
+                            underline: const SizedBox(),
                           ),
                         ),
+                ),
+                if (_ttsLanguage.toLowerCase().startsWith('fil') &&
+                    !kIsWeb &&
+                    defaultTargetPlatform == TargetPlatform.android)
+                  _SettingsTile(
+                    title: 'Offline Filipino voice',
+                    subtitle: hasLanguageVoice
+                        ? 'Device Filipino voice is available'
+                        : 'Download Filipino speech data from Android',
+                    trailing: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        IconButton(
+                          tooltip: 'Refresh device voices',
+                          onPressed: _loadSettings,
+                          icon: const Icon(Icons.refresh),
+                        ),
+                        TextButton(
+                          onPressed: _installOfflineVoice,
+                          child: const Text('Install'),
+                        ),
                       ],
-                      onChanged: !hasLanguageVoice ? null : _selectTtsVoice,
-                      underline: const SizedBox(),
                     ),
                   ),
-          ),
-          if (_ttsLanguage.toLowerCase().startsWith('fil') &&
-              !kIsWeb &&
-              defaultTargetPlatform == TargetPlatform.android)
-            _SettingsTile(
-              title: 'Offline Filipino voice',
-              subtitle: hasLanguageVoice
-                  ? 'Device Filipino voice is available'
-                  : 'Download Filipino speech data from Android',
-              trailing: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  IconButton(
-                    tooltip: 'Refresh device voices',
-                    onPressed: _loadSettings,
-                    icon: const Icon(Icons.refresh),
+                _SettingsTile(
+                  title: 'Speech Rate',
+                  subtitle: 'Adjust speaking speed',
+                  trailing: SizedBox(
+                    width: 150,
+                    child: Slider(
+                      value: _ttsRate,
+                      min: 0.3,
+                      max: 0.8,
+                      divisions: 5,
+                      label: _ttsRate.toStringAsFixed(1),
+                      onChanged: (value) async {
+                        setState(() => _ttsRate = value);
+                        final ttsService = context.read<TtsService>();
+                        try {
+                          await ttsService.setRate(value);
+                        } catch (error) {
+                          _showError('Could not change speech rate: $error');
+                        }
+                      },
+                    ),
                   ),
-                  TextButton(
-                    onPressed: _installOfflineVoice,
-                    child: const Text('Install'),
+                ),
+                _SettingsTile(
+                  title: 'Test Voice',
+                  subtitle: 'Hear the current TTS settings',
+                  trailing: IconButton(
+                    icon: const Icon(Icons.volume_up),
+                    onPressed: _testVoice,
                   ),
-                ],
-              ),
-            ),
-          _SettingsTile(
-            title: 'Speech Rate',
-            subtitle: 'Adjust speaking speed',
-            trailing: SizedBox(
-              width: 150,
-              child: Slider(
-                value: _ttsRate,
-                min: 0.3,
-                max: 0.8,
-                divisions: 5,
-                label: _ttsRate.toStringAsFixed(1),
-                onChanged: (value) async {
-                  setState(() => _ttsRate = value);
-                  final ttsService = context.read<TtsService>();
-                  try {
-                    await ttsService.setRate(value);
-                  } catch (error) {
-                    _showError('Could not change speech rate: $error');
-                  }
-                },
-              ),
-            ),
-          ),
-          _SettingsTile(
-            title: 'Test Voice',
-            subtitle: 'Hear the current TTS settings',
-            trailing: IconButton(
-              icon: const Icon(Icons.volume_up),
-              onPressed: _testVoice,
-            ),
-          ),
+                ),
 
-          const SizedBox(height: 24),
-          // Model Section
-          _SectionHeader('Model'),
-          _SettingsTile(
-            title: 'Model Version',
-            subtitle: _modelVersion == 'Not installed'
-                ? 'The FSL recognition model is still in training'
-                : _modelVersion,
-          ),
-          _SettingsTile(
-            title: 'Check for Model Updates (OTA)',
-            subtitle: 'Fetch latest FSL recognition model over the air',
-            trailing: const Icon(Icons.cloud_download_outlined),
-            onTap: () {
-              final messenger = ScaffoldMessenger.of(context);
-              showDialog(
-                context: context,
-                builder: (context) => ModelUpdateDialog(
-                  modelUpdater: ModelUpdater(),
-                  onUpdateComplete: () async {
-                    final newVersion = await ModelUpdater().getInstalledVersion();
-                    if (!mounted) return;
-                    setState(() {
-                      _modelVersion = newVersion;
-                    });
-                    messenger.showSnackBar(
-                      SnackBar(content: Text('Model updated to $newVersion')),
+                const SizedBox(height: 24),
+                // Model Section
+                _SectionHeader('Model'),
+                _SettingsTile(
+                  title: 'FSL recognition model',
+                  subtitle: _modelVersion,
+                  trailing: IconButton(
+                    tooltip: 'Refresh backend model status',
+                    onPressed: _isCheckingModel
+                        ? null
+                        : () => _refreshModelStatus(),
+                    icon: _isCheckingModel
+                        ? const SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.refresh_rounded),
+                  ),
+                ),
+                const _SettingsTile(
+                  title: 'Model updates',
+                  subtitle:
+                      'The model is managed and updated by the configured backend.',
+                ),
+
+                const SizedBox(height: 24),
+                // Data Section
+                _SectionHeader('Data'),
+                _SettingsTile(
+                  title: 'Export History',
+                  subtitle: 'Export translation history as CSV',
+                  trailing: const Icon(Icons.download),
+                  onTap: _exportHistory,
+                ),
+                _SettingsTile(
+                  title: 'Clear History',
+                  subtitle: 'Delete all translation history',
+                  trailing: const Icon(Icons.delete_outline, color: Colors.red),
+                  onTap: _clearHistory,
+                ),
+                _SettingsTile(
+                  title: 'Clear Cache',
+                  subtitle: 'Remove exported history files',
+                  trailing: const Icon(Icons.cleaning_services),
+                  onTap: _clearCache,
+                ),
+
+                const SizedBox(height: 24),
+                // About Section
+                _SectionHeader('About'),
+                _SettingsTile(
+                  title: 'Welcome & Landing Page',
+                  subtitle: 'Revisit introduction, quick phrases & controls',
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => const LandingPageScreen(),
+                      ),
                     );
                   },
                 ),
-              );
-            },
+                _SettingsTile(title: 'Version', subtitle: '1.0.0'),
+                _SettingsTile(
+                  title: 'Privacy Policy',
+                  subtitle: 'View our privacy policy',
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () => _showAboutDialog('Privacy Policy'),
+                ),
+                _SettingsTile(
+                  title: 'Licenses',
+                  subtitle: 'Open source licenses',
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () => showLicensePage(context: context),
+                ),
+                const SizedBox(height: 24),
+              ],
+            ),
           ),
-
-          const SizedBox(height: 24),
-          // Data Section
-          _SectionHeader('Data'),
-          _SettingsTile(
-            title: 'Export History',
-            subtitle: 'Export translation history as CSV',
-            trailing: const Icon(Icons.download),
-            onTap: _exportHistory,
-          ),
-          _SettingsTile(
-            title: 'Clear History',
-            subtitle: 'Delete all translation history',
-            trailing: const Icon(Icons.delete_outline, color: Colors.red),
-            onTap: _clearHistory,
-          ),
-          _SettingsTile(
-            title: 'Clear Cache',
-            subtitle: 'Remove exported history files',
-            trailing: const Icon(Icons.cleaning_services),
-            onTap: _clearCache,
-          ),
-
-          const SizedBox(height: 24),
-          // About Section
-          _SectionHeader('About'),
-          _SettingsTile(
-            title: 'Welcome & Landing Page',
-            subtitle: 'Revisit introduction, quick phrases & controls',
-            trailing: const Icon(Icons.chevron_right),
-            onTap: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => const LandingPageScreen()),
-              );
-            },
-          ),
-          _SettingsTile(title: 'Version', subtitle: '1.0.0'),
-          _SettingsTile(
-            title: 'Privacy Policy',
-            subtitle: 'View our privacy policy',
-            trailing: const Icon(Icons.chevron_right),
-            onTap: () => _showAboutDialog('Privacy Policy'),
-          ),
-          _SettingsTile(
-            title: 'Licenses',
-            subtitle: 'Open source licenses',
-            trailing: const Icon(Icons.chevron_right),
-            onTap: () => showLicensePage(context: context),
-          ),
-          const SizedBox(height: 24),
         ],
       ),
-    ),
-  ],
-),
-);
+    );
   }
 
   Future<void> _exportHistory() async {
@@ -749,7 +813,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       final result = await showDialog<({String url, String token})>(
         context: context,
         builder: (dialogContext) => AlertDialog(
-          title: const Text('Configure online TTS'),
+          title: const Text('Configure backend services'),
           content: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -758,22 +822,23 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 keyboardType: TextInputType.url,
                 decoration: const InputDecoration(
                   labelText: 'Backend URL',
-                  hintText: 'https://your-server.example',
+                  hintText: 'http://192.168.1.25:5000 or https://your-server',
                 ),
               ),
               TextField(
                 controller: tokenController,
                 obscureText: true,
                 decoration: const InputDecoration(
-                  labelText: 'TTS access token',
+                  labelText: 'Backend access token',
                 ),
               ),
               const SizedBox(height: 12),
               const Text(
-                'For local development, the speech service is detected '
-                'automatically and does not need a token. A hosted app can '
-                'detect a same-origin speech service. Never put an Azure key '
-                'here.',
+                'This backend URL is used for FSL recognition and online '
+                'speech. Use a private-network URL for local device testing '
+                'or HTTPS for hosted servers. A token is optional for local '
+                'browser access but required for mobile clients and hosted '
+                'servers. Never put an Azure key here.',
               ),
             ],
           ),
@@ -797,6 +862,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       if (mounted) {
         setState(() => _ttsServerUrl = _settingsService.ttsServerUrl);
       }
+      await _refreshModelStatus(showError: false);
     } catch (error) {
       _showError('Could not save online TTS server: $error');
     } finally {
@@ -974,7 +1040,9 @@ class _SettingsTile extends StatelessWidget {
         ),
         boxShadow: [
           BoxShadow(
-            color: isDark ? Colors.black.withValues(alpha: 0.15) : _kAppBlue.withValues(alpha: 0.03),
+            color: isDark
+                ? Colors.black.withValues(alpha: 0.15)
+                : _kAppBlue.withValues(alpha: 0.03),
             blurRadius: 8,
             offset: const Offset(0, 2),
           ),
@@ -984,7 +1052,9 @@ class _SettingsTile extends StatelessWidget {
         color: Colors.transparent,
         borderRadius: BorderRadius.circular(18),
         child: ListTile(
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(18),
+          ),
           title: Text(
             title,
             style: TextStyle(
@@ -998,13 +1068,18 @@ class _SettingsTile extends StatelessWidget {
                   subtitle!,
                   style: TextStyle(
                     fontSize: 12,
-                    color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B),
+                    color: isDark
+                        ? const Color(0xFF94A3B8)
+                        : const Color(0xFF64748B),
                   ),
                 )
               : null,
           trailing: trailing,
           onTap: onTap,
-          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+          contentPadding: const EdgeInsets.symmetric(
+            horizontal: 16,
+            vertical: 4,
+          ),
         ),
       ),
     );

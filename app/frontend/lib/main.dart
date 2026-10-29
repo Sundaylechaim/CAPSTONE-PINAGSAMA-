@@ -41,7 +41,8 @@ Future<void> main() async {
           create: (_) => ThemeProvider(settingsService),
         ),
         ChangeNotifierProvider<RecognitionProvider>(
-          create: (_) => RecognitionProvider(),
+          create: (context) =>
+              RecognitionProvider(settings: context.read<SettingsService>()),
         ),
       ],
       child: const TinigSenyasApp(),

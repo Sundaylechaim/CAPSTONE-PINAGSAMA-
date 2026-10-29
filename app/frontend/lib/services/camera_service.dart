@@ -13,13 +13,17 @@ class CameraService {
   CameraController? get controller => _controller;
   bool get isInitialized => _controller?.value.isInitialized ?? false;
   CameraDescription? get selectedCamera => _selectedCamera;
-  List<CameraDescription> get availableCamerasList => List.unmodifiable(_cameras);
+  List<CameraDescription> get availableCamerasList =>
+      List.unmodifiable(_cameras);
   bool get canSwitchCamera => _cameras.length > 1 && !_isSwitching;
-  Stream<CameraImage> get frameStream => _frameController?.stream ?? const Stream.empty();
+  Stream<CameraImage> get frameStream =>
+      _frameController?.stream ?? const Stream.empty();
 
   /// Checks whether camera permission has been granted without automatically prompting.
   Future<bool> hasCameraPermission() async {
-    if (kIsWeb) return true; // Web browsers prompt upon getUserMedia / availableCameras
+    if (kIsWeb) {
+      return true;
+    }
     final status = await Permission.camera.status;
     return status.isGranted;
   }
@@ -97,10 +101,12 @@ class CameraService {
 
     // 4. Initialize the camera controller with fallback strategies
     await _initializeControllerWithFallback(_selectedCamera!);
-    _startFrameStream();
+    await _startFrameStream();
   }
 
-  Future<void> _initializeControllerWithFallback(CameraDescription camera) async {
+  Future<void> _initializeControllerWithFallback(
+    CameraDescription camera,
+  ) async {
     await _controller?.dispose();
 
     // Priority list of resolution presets for maximum camera compatibility
@@ -113,7 +119,11 @@ class CameraService {
     // Priority list of image format groups (YUV420 for mobile ML, null/default for web/desktop)
     final formatGroups = kIsWeb
         ? <ImageFormatGroup?>[null]
-        : <ImageFormatGroup?>[ImageFormatGroup.yuv420, ImageFormatGroup.nv21, null];
+        : <ImageFormatGroup?>[
+            ImageFormatGroup.yuv420,
+            ImageFormatGroup.nv21,
+            null,
+          ];
 
     Object? lastError;
 
@@ -133,22 +143,31 @@ class CameraService {
           return;
         } catch (e) {
           lastError = e;
-          debugPrint('Camera init fallback (Resolution: $resolution, Format: $format): $e');
+          debugPrint(
+            'Camera init fallback (Resolution: $resolution, Format: $format): $e',
+          );
         }
       }
     }
 
-    throw CameraException('Could not initialize camera "${camera.name}": $lastError');
+    throw CameraException(
+      'Could not initialize camera "${camera.name}": $lastError',
+    );
   }
 
-  void _startFrameStream() {
+  Future<void> _startFrameStream() async {
     _frameController?.close();
     _frameController = StreamController<CameraImage>.broadcast();
 
-    if (_controller == null || !_controller!.value.isInitialized) return;
+    final controller = _controller;
+    if (controller == null ||
+        !controller.value.isInitialized ||
+        !controller.supportsImageStreaming()) {
+      return;
+    }
 
     try {
-      _controller!.startImageStream((CameraImage image) {
+      await controller.startImageStream((CameraImage image) {
         if (!_frameController!.isClosed) {
           _frameController!.add(image);
         }
@@ -186,7 +205,7 @@ class CameraService {
     } catch (_) {}
 
     await _initializeControllerWithFallback(camera);
-    _startFrameStream();
+    await _startFrameStream();
   }
 
   /// Helper to get a human-friendly display name for a camera
@@ -196,7 +215,9 @@ class CameraService {
       CameraLensDirection.back => 'Back Camera',
       CameraLensDirection.external => 'External / USB Webcam',
     };
-    return camera.name.isNotEmpty ? '$direction (${camera.name})' : '$direction #$index';
+    return camera.name.isNotEmpty
+        ? '$direction (${camera.name})'
+        : '$direction #$index';
   }
 
   void dispose() {

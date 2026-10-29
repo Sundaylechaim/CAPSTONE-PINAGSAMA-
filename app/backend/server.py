@@ -3,14 +3,18 @@ import os
 import cv2
 import mediapipe as mp
 import uvicorn
-from fastapi import FastAPI, HTTPException
+import numpy as np
+from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+from starlette.concurrency import run_in_threadpool
+from pathlib import Path
 from typing import List, Optional
 
-from tts_api import tts_api
+from tts_api import is_authorized_backend_request, tts_api
 from hand_tracker import HandTracker, HandValidationResult
+from fsl_recognition import FslRecognitionEngine
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("tinigsenyas.backend")
@@ -32,6 +36,10 @@ app.add_middleware(
 
 # Mount TTS Router
 app.include_router(tts_api)
+
+fsl_recognizer = FslRecognitionEngine(
+    Path(__file__).parent / "assets" / "recognition"
+)
 
 # ---------------------------------------------------------------------------
 # Over-The-Air (OTA) Synchronization Endpoints (Chapters 1 & 3 Specification)
@@ -192,6 +200,103 @@ def get_hand_features():
         "left_hand": None,
         "right_hand": None,
     }
+
+
+@app.get("/api/v1/recognition/status", tags=["FSL Recognition"])
+def get_recognition_status():
+    try:
+        class_count = fsl_recognizer.class_count
+    except (FileNotFoundError, ImportError, ValueError, RuntimeError) as error:
+        raise HTTPException(
+            status_code=503,
+            detail=f"FSL recognition is unavailable: {error}",
+        ) from error
+    return {
+        "ready": True,
+        "model_version": "1.0.1",
+        "class_count": class_count,
+        "sequence_length": 60,
+    }
+
+
+@app.post("/api/v1/recognition/frame", tags=["FSL Recognition"])
+async def recognize_frame(
+    request: Request,
+    session_id: str = Header(alias="X-Session-ID", min_length=16, max_length=64),
+    authorization: Optional[str] = Header(None),
+    origin: Optional[str] = Header(None),
+):
+    if not is_authorized_backend_request(request, authorization, origin):
+        raise HTTPException(
+            status_code=401,
+            detail="An authorized backend request is required for FSL recognition.",
+        )
+    if not all(char.isalnum() or char == "-" for char in session_id):
+        raise HTTPException(status_code=400, detail="Invalid recognition session ID.")
+    if request.headers.get("content-type", "").split(";")[0].strip() != "image/jpeg":
+        raise HTTPException(status_code=415, detail="Send a JPEG camera frame.")
+
+    frame_bytes = await request.body()
+    if not frame_bytes or len(frame_bytes) > 2_000_000:
+        raise HTTPException(
+            status_code=413,
+            detail="Camera frame must be between 1 byte and 2 MB.",
+        )
+    frame = cv2.imdecode(
+        np.frombuffer(frame_bytes, dtype=np.uint8), cv2.IMREAD_COLOR
+    )
+    if frame is None:
+        raise HTTPException(status_code=400, detail="The camera frame is not a valid JPEG.")
+    if frame.shape[1] > 1920 or frame.shape[0] > 1080:
+        raise HTTPException(
+            status_code=413,
+            detail="Camera frame dimensions must not exceed 1920x1080.",
+        )
+    if max(frame.shape[:2]) > 640:
+        scale = 640 / max(frame.shape[:2])
+        frame = cv2.resize(
+            frame,
+            (round(frame.shape[1] * scale), round(frame.shape[0] * scale)),
+            interpolation=cv2.INTER_AREA,
+        )
+
+    try:
+        result = await run_in_threadpool(
+            fsl_recognizer.process_frame, session_id, frame
+        )
+    except (FileNotFoundError, ImportError, ValueError, RuntimeError) as error:
+        raise HTTPException(
+            status_code=503,
+            detail=f"FSL recognition could not process the frame: {error}",
+        ) from error
+
+    return {
+        "status": result.status,
+        "frames_collected": result.frames_collected,
+        "label": result.label,
+        "confidence": result.confidence,
+        "hand_landmarks": result.hand_landmarks,
+        "frame_width": result.frame_width,
+        "frame_height": result.frame_height,
+    }
+
+
+@app.delete("/api/v1/recognition/session", status_code=204, tags=["FSL Recognition"])
+def reset_recognition_session(
+    request: Request,
+    session_id: str = Header(alias="X-Session-ID", min_length=16, max_length=64),
+    authorization: Optional[str] = Header(None),
+    origin: Optional[str] = Header(None),
+):
+    if not is_authorized_backend_request(request, authorization, origin):
+        raise HTTPException(
+            status_code=401,
+            detail="An authorized backend request is required for FSL recognition.",
+        )
+    if not all(char.isalnum() or char == "-" for char in session_id):
+        raise HTTPException(status_code=400, detail="Invalid recognition session ID.")
+    fsl_recognizer.reset_session(session_id)
+
 
 if __name__ == "__main__":
     uvicorn.run("server:app", host="0.0.0.0", port=5000, reload=False)
