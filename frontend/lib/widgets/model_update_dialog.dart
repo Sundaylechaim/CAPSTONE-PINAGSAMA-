@@ -27,6 +27,7 @@ class _ModelUpdateDialogState extends State<ModelUpdateDialog> {
 
   Future<void> _checkForUpdates() async {
     final info = await widget.modelUpdater.checkForUpdates();
+    if (!mounted) return;
     setState(() {
       _updateInfo = info;
     });
@@ -40,15 +41,19 @@ class _ModelUpdateDialogState extends State<ModelUpdateDialog> {
     _downloadStream = widget.modelUpdater.downloadUpdate(info);
     _downloadStream!.listen(
       (update) {
+        if (!mounted) return;
         setState(() {
           _updateInfo = update;
         });
         if (update.status == UpdateStatus.upToDate && update.progress >= 1.0) {
           widget.onUpdateComplete?.call();
-          Navigator.of(context).pop();
+          if (mounted) {
+            Navigator.of(context).pop();
+          }
         }
       },
       onError: (error) {
+        if (!mounted) return;
         setState(() {
           _updateInfo = info.copyWith(status: UpdateStatus.error);
         });
@@ -58,7 +63,6 @@ class _ModelUpdateDialogState extends State<ModelUpdateDialog> {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
     final info = _updateInfo;
 
     if (info == null) {

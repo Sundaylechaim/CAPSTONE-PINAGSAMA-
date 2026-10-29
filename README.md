@@ -47,3 +47,13 @@ Open your terminal and run:
 ```bash
 git clone [https://github.com/Sundaylechaim/TinigSenyas.git](https://github.com/Sundaylechaim/TinigSenyas.git)
 cd tinigsenyas
+
+
+---
+
+## Free Deployment, Offline & OTA Guide (No App Store Fees)
+
+For community testing and sharing with KAINAKAP members via Google Drive:
+- See the complete step-by-step guide: [docs/FREE_DEPLOYMENT_AND_OTA_GUIDE.md](docs/FREE_DEPLOYMENT_AND_OTA_GUIDE.md)
+- **One-Click Android Build**: Run `frontend/build_android_apk.ps1` to compile the release APK and automatically open the file to upload to Google Drive.
+- **iOS Free Installation**: Run as a PWA via Safari ("Add to Home Screen") or sideload via Sideloadly with a free Apple ID.

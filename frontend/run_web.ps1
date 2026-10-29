@@ -5,7 +5,19 @@ $backendPath = Join-Path (Split-Path $frontendPath -Parent) 'backend'
 $backendRequirements = Join-Path $backendPath 'requirements.txt'
 $backendVenv = Join-Path $backendPath '.venv'
 $backendPython = Join-Path $backendVenv 'Scripts\python.exe'
-$systemPython = (Get-Command python -ErrorAction Stop).Source
+function Get-CompatiblePython {
+    foreach ($ver in @('-3.10', '-3.11', '-3.12')) {
+        try {
+            $foundPath = (& py $ver -c "import sys; print(sys.executable)" 2>$null)
+            if ($LASTEXITCODE -eq 0 -and $foundPath -and (Test-Path -LiteralPath $foundPath.Trim())) {
+                return $foundPath.Trim()
+            }
+        } catch {}
+    }
+    return (Get-Command python -ErrorAction Stop).Source
+}
+
+$systemPython = Get-CompatiblePython
 $backendLog = Join-Path $env:TEMP "tinigsenyas-backend-$PID.log"
 $backendErrorLog = Join-Path $env:TEMP "tinigsenyas-backend-$PID-error.log"
 $dependencyCheckLog = Join-Path $env:TEMP "tinigsenyas-dependency-check-$PID.log"

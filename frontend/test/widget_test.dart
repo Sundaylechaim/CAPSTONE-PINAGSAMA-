@@ -28,6 +28,13 @@ void main() {
     );
     await tester.pumpAndSettle();
 
+    // From landing page, navigate to dashboard to test the home screen
+    final appbarDashboardBtn = find.byKey(const Key('appbar_dashboard_button'));
+    if (appbarDashboardBtn.evaluate().isNotEmpty) {
+      await tester.tap(appbarDashboardBtn);
+      await tester.pumpAndSettle();
+    }
+
     expect(find.text('TinigSenyas'), findsOneWidget);
     expect(find.text('SIGN TO TEXT'), findsOneWidget);
     expect(find.text('SPEECH TO TEXT'), findsOneWidget);
@@ -60,6 +67,13 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
+
+    final appbarDashboardBtn = find.byKey(const Key('appbar_dashboard_button'));
+    if (appbarDashboardBtn.evaluate().isNotEmpty) {
+      await tester.tap(appbarDashboardBtn);
+      await tester.pumpAndSettle();
+    }
+
     expect(
       Theme.of(tester.element(find.text('TinigSenyas'))).brightness,
       Brightness.light,

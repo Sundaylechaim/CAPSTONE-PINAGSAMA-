@@ -2,6 +2,12 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>NSCameraUsageDescription</key>
+	<string>TinigSenyas needs camera access for Filipino Sign Language recognition.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>TinigSenyas needs microphone access for speech-to-text translation.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>TinigSenyas uses speech recognition to convert spoken dialogue to text.</string>
 	<key>CADisableMinimumFrameDurationOnPhone</key>
 	<true/>
 	<key>CFBundleDevelopmentRegion</key>
@@ -28,13 +34,31 @@
 	<true/>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
+	<key>NSCameraUsageDescription</key>
+	<string>TinigSenyas needs camera access for Filipino Sign Language recognition.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>TinigSenyas needs microphone access for speech-to-text translation.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>TinigSenyas uses speech recognition to convert spoken dialogue to text.</string>
 		<key>UIApplicationSupportsMultipleScenes</key>
 		<false/>
 		<key>UISceneConfigurations</key>
 		<dict>
+	<key>NSCameraUsageDescription</key>
+	<string>TinigSenyas needs camera access for Filipino Sign Language recognition.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>TinigSenyas needs microphone access for speech-to-text translation.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>TinigSenyas uses speech recognition to convert spoken dialogue to text.</string>
 			<key>UIWindowSceneSessionRoleApplication</key>
 			<array>
 				<dict>
+	<key>NSCameraUsageDescription</key>
+	<string>TinigSenyas needs camera access for Filipino Sign Language recognition.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>TinigSenyas needs microphone access for speech-to-text translation.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>TinigSenyas uses speech recognition to convert spoken dialogue to text.</string>
 					<key>UISceneClassName</key>
 					<string>UIWindowScene</string>
 					<key>UISceneConfigurationName</key>

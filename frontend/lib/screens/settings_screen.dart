@@ -1,3 +1,4 @@
+import 'dart:ui';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -9,6 +10,13 @@ import '../services/settings_service.dart';
 import '../services/database_helper.dart';
 import '../services/tts_service.dart';
 import '../widgets/connectivity_badge.dart';
+import 'landing_page_screen.dart';
+import '../services/model_updater.dart';
+import '../widgets/model_update_dialog.dart';
+
+
+const Color _kAppBlue = Color(0xFF0138FF);
+const Color _kAppYellow = Color(0xFFFFC801);
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -86,14 +94,110 @@ class _SettingsScreenState extends State<SettingsScreen> {
         .toList();
     final hasLanguageVoice = languageVoices.isNotEmpty;
 
+    final isDark = themeProvider.themeMode == ThemeMode.dark ||
+        (themeProvider.themeMode == ThemeMode.system &&
+            MediaQuery.of(context).platformBrightness == Brightness.dark);
+    final bgColor = isDark ? const Color(0xFF090E1A) : const Color(0xFFF1F5F9);
+
     return Scaffold(
+      backgroundColor: bgColor,
+      extendBodyBehindAppBar: true,
       appBar: AppBar(
-        title: const Text('Settings'),
-        actions: [const ConnectivityBadge(), const SizedBox(width: 16)],
+        elevation: 0,
+        scrolledUnderElevation: 0,
+        backgroundColor: Colors.transparent,
+        flexibleSpace: ClipRect(
+          child: BackdropFilter(
+            filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
+            child: Container(
+              decoration: BoxDecoration(
+                color: isDark
+                    ? const Color(0xFF0C1220).withValues(alpha: 0.65)
+                    : Colors.white.withValues(alpha: 0.70),
+                border: Border(
+                  bottom: BorderSide(
+                    color: isDark
+                        ? Colors.white.withValues(alpha: 0.1)
+                        : Colors.black.withValues(alpha: 0.05),
+                    width: 1,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+        title: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text(
+              'Settings',
+              style: TextStyle(
+                fontWeight: FontWeight.w900,
+                fontSize: 19,
+                letterSpacing: -0.4,
+              ),
+            ),
+            const SizedBox(width: 5),
+            Container(
+              width: 7,
+              height: 7,
+              decoration: const BoxDecoration(
+                color: _kAppYellow,
+                shape: BoxShape.circle,
+              ),
+            ),
+          ],
+        ),
+        actions: const [
+          ConnectivityBadge(),
+          SizedBox(width: 14),
+        ],
       ),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
+      body: Stack(
         children: [
+          Positioned(
+            top: -50,
+            right: -60,
+            child: IgnorePointer(
+              child: Container(
+                width: 280,
+                height: 280,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  gradient: RadialGradient(
+                    colors: [
+                      _kAppBlue.withValues(alpha: isDark ? 0.30 : 0.20),
+                      _kAppBlue.withValues(alpha: 0.0),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+          Positioned(
+            bottom: -50,
+            left: -60,
+            child: IgnorePointer(
+              child: Container(
+                width: 280,
+                height: 280,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  gradient: RadialGradient(
+                    colors: [
+                      _kAppYellow.withValues(alpha: isDark ? 0.20 : 0.16),
+                      _kAppYellow.withValues(alpha: 0.0),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+          SafeArea(
+            child: ListView(
+              physics: const BouncingScrollPhysics(),
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              children: [
           // Theme Section
           _SectionHeader('Appearance'),
           _SettingsTile(
@@ -445,6 +549,30 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ? 'The FSL recognition model is still in training'
                 : _modelVersion,
           ),
+          _SettingsTile(
+            title: 'Check for Model Updates (OTA)',
+            subtitle: 'Fetch latest FSL recognition model over the air',
+            trailing: const Icon(Icons.cloud_download_outlined),
+            onTap: () {
+              final messenger = ScaffoldMessenger.of(context);
+              showDialog(
+                context: context,
+                builder: (context) => ModelUpdateDialog(
+                  modelUpdater: ModelUpdater(),
+                  onUpdateComplete: () async {
+                    final newVersion = await ModelUpdater().getInstalledVersion();
+                    if (!mounted) return;
+                    setState(() {
+                      _modelVersion = newVersion;
+                    });
+                    messenger.showSnackBar(
+                      SnackBar(content: Text('Model updated to $newVersion')),
+                    );
+                  },
+                ),
+              );
+            },
+          ),
 
           const SizedBox(height: 24),
           // Data Section
@@ -471,6 +599,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
           const SizedBox(height: 24),
           // About Section
           _SectionHeader('About'),
+          _SettingsTile(
+            title: 'Welcome & Landing Page',
+            subtitle: 'Revisit introduction, quick phrases & controls',
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const LandingPageScreen()),
+              );
+            },
+          ),
           _SettingsTile(title: 'Version', subtitle: '1.0.0'),
           _SettingsTile(
             title: 'Privacy Policy',
@@ -484,9 +623,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
             trailing: const Icon(Icons.chevron_right),
             onTap: () => showLicensePage(context: context),
           ),
+          const SizedBox(height: 24),
         ],
       ),
-    );
+    ),
+  ],
+),
+);
   }
 
   Future<void> _exportHistory() async {
@@ -774,14 +917,30 @@ class _SectionHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     return Padding(
-      padding: const EdgeInsets.only(bottom: 8, top: 8),
-      child: Text(
-        title,
-        style: Theme.of(context).textTheme.titleMedium?.copyWith(
-          fontWeight: FontWeight.bold,
-          color: Theme.of(context).colorScheme.primary,
-        ),
+      padding: const EdgeInsets.only(bottom: 8, top: 14, left: 4),
+      child: Row(
+        children: [
+          Container(
+            width: 4,
+            height: 16,
+            decoration: BoxDecoration(
+              color: _kAppBlue,
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Text(
+            title,
+            style: TextStyle(
+              fontSize: 14,
+              fontWeight: FontWeight.w900,
+              letterSpacing: 0.5,
+              color: isDark ? const Color(0xFF60A5FA) : _kAppBlue,
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -802,13 +961,51 @@ class _SettingsTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Card(
-      child: ListTile(
-        title: Text(title),
-        subtitle: subtitle != null ? Text(subtitle!) : null,
-        trailing: trailing,
-        onTap: onTap,
-        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
+    return Container(
+      margin: const EdgeInsets.symmetric(vertical: 4),
+      decoration: BoxDecoration(
+        color: isDark ? const Color(0xFF141F36) : Colors.white,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(
+          color: isDark ? const Color(0xFF223253) : const Color(0xFFE2E8F0),
+          width: 1.2,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: isDark ? Colors.black.withValues(alpha: 0.15) : _kAppBlue.withValues(alpha: 0.03),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Material(
+        color: Colors.transparent,
+        borderRadius: BorderRadius.circular(18),
+        child: ListTile(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+          title: Text(
+            title,
+            style: TextStyle(
+              fontWeight: FontWeight.w700,
+              fontSize: 14,
+              color: isDark ? Colors.white : const Color(0xFF0F172A),
+            ),
+          ),
+          subtitle: subtitle != null
+              ? Text(
+                  subtitle!,
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B),
+                  ),
+                )
+              : null,
+          trailing: trailing,
+          onTap: onTap,
+          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+        ),
       ),
     );
   }
