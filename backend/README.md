@@ -1,49 +1,64 @@
-# Backend setup
+# TinigSenyas Backend API (FastAPI)
 
-The Flask backend provides the camera stream and Filipino text-to-speech.
+High-performance, asynchronous REST API serving text-to-speech synthesis, alpha camera landmark streaming, and Over-The-Air (OTA) FSL vocabulary and model synchronization for **TinigSenyas**.
 
-## Run the web app locally
+Aligned with the architecture specified in **Chapters 1, 2, and 3** for the Capstone Project at Eulogio "Amang" Rodriguez Institute of Science and Technology (EARIST).
 
-From the repository root, start the backend and Flutter web app together:
+---
 
+## Tech Stack Alignment
+
+* **Framework**: FastAPI (Asynchronous ASGI Web Framework)
+* **ASGI Server**: Uvicorn
+* **Data Validation**: Pydantic v2
+* **Computer Vision**: Google MediaPipe (Hands / Skeletal Topologies) & OpenCV
+* **Speech Synthesis**: Edge-TTS (local loopback) & Azure Cognitive Speech Services
+
+---
+
+## Interactive API Documentation (Swagger / OpenAPI)
+
+Once the backend is running, open your browser to view the interactive documentation:
+* **Swagger UI**: [http://127.0.0.1:5000/docs](http://127.0.0.1:5000/docs)
+* **ReDoc**: [http://127.0.0.1:5000/redoc](http://127.0.0.1:5000/redoc)
+
+---
+
+## Key Endpoints
+
+### 1. Health & Status
+* `GET /tts/health`: Validates that the backend service is alive and ready.
+
+### 2. Auditory Synthesis
+* `POST /tts/synthesize`: Generates high-quality synthesized Filipino speech (`fil-PH-BlessicaNeural` or `fil-PH-AngeloNeural`) via SSML/Edge-TTS.
+
+### 3. Over-The-Air (OTA) Updates (Chapter 3 Specification)
+* `GET /api/v1/ota/manifest`: Returns model versioning, SHA-256 integrity hash, and download URL for the quantized ST-GCN mobile package.
+* `GET /api/v1/ota/vocabulary`: Asynchronously synchronizes validated FSL transactional phrases directly into the mobile SQLite database without disrupting offline translation.
+
+### 4. Alpha Camera Tracking Stream
+* `GET /video_feed`: Streams webcam frames with real-time MediaPipe skeletal landmark overlays for alpha testing.
+
+---
+
+## How to Run Locally
+
+### Option A: Via the Web Launcher
+From the repository root, start both the FastAPI backend and Flutter web application:
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\frontend\run_web.ps1
 ```
 
-On first run, the launcher creates an isolated `backend\.venv` and installs the
-backend requirements there. It does not modify packages in the system Python
-environment.
+### Option B: Directly with Uvicorn
+From the `backend` folder:
+```powershell
+.\.venv\Scripts\activate
+uvicorn server:app --host 0.0.0.0 --port 5000 --reload
+```
 
-This starts the local speech endpoint at `http://127.0.0.1:5000`. The app
-detects that address automatically in Chrome; users do not need to enter a
-server URL, access token, or Azure credentials. Select Filipino, leave Voice
-source on Automatic, and use Test Voice.
+---
 
-Without Azure credentials, the backend uses `edge-tts` to request the selected
-Microsoft Edge Filipino voice (`fil-PH-BlessicaNeural` or
-`fil-PH-AngeloNeural`). This requires internet access and sends the text being
-spoken to Microsoft's online speech service. `edge-tts` is an unofficial
-client for that service; Microsoft can change or restrict it. For a configured
-Azure Speech resource, set `AZURE_SPEECH_KEY` and `AZURE_SPEECH_REGION` on the
-backend host; Azure is then used instead.
-
-## Hosting
-
-For a hosted web app, serve the speech endpoint on the same origin as the app
-and set `TTS_ALLOWED_ORIGINS` on the backend to that exact HTTPS origin (for
-example, `https://app.example.com`). The app will detect its service URL, so
-end users do not need to enter a URL or token. For other remote clients, set a
-long random `TTS_API_TOKEN` and configure it in advanced app settings. Requests
-without a token are accepted only from loopback clients or an explicitly
-allowlisted web origin. Origin checks are not a substitute for authentication;
-use HTTPS and request quotas for public deployments.
-
-## Offline speech
-
-The app's offline mode uses Filipino speech voices installed in Android's
-system text-to-speech engine. Use **Install** in app Settings to open Android's
-voice-data installer, install Filipino speech data if the selected engine
-offers it, then return to the app and refresh the voice list. The app does not
-currently bundle a Tagalog neural model; model integration is a separate
-inference task, and the candidate MMS Tagalog checkpoint is CC-BY-NC 4.0
-licensed.
+## Running Automated Tests
+```powershell
+.\.venv\Scripts\python.exe -m unittest test_tts_api.py
+```

@@ -1,15 +1,21 @@
 import asyncio
 import html
 import hmac
+import logging
 import os
 import re
+from typing import Optional
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
-from flask import Blueprint, Response, current_app, jsonify, request
+from fastapi import APIRouter, Header, Request as FastAPIRequest, status
+from fastapi.responses import JSONResponse, Response
+from pydantic import BaseModel, Field
 
-tts_api = Blueprint("tts_api", __name__)
+logger = logging.getLogger("tinigsenyas.tts")
+
+tts_api = APIRouter(tags=["Text to Speech"])
 
 _ALLOWED_VOICES = {
     "fil-PH-BlessicaNeural",
@@ -19,12 +25,17 @@ _REGION_PATTERN = re.compile(r"^[a-z0-9-]+$")
 _MAX_TEXT_LENGTH = 2000
 
 
-@tts_api.get("/tts/health")
-def tts_health():
-    return jsonify(status="ok")
+class SynthesizePayload(BaseModel):
+    text: str = Field(..., min_length=1, max_length=_MAX_TEXT_LENGTH)
+    voice: str = "fil-PH-BlessicaNeural"
+    rate: int = Field(default=0, ge=-50, le=50)
 
 
-def _is_loopback_origin(origin: str | None) -> bool:
+class TtsProviderError(RuntimeError):
+    pass
+
+
+def _is_loopback_origin(origin: Optional[str]) -> bool:
     if not origin:
         return True
     try:
@@ -40,10 +51,6 @@ def _is_loopback_origin(origin: str | None) -> bool:
         and not parsed_origin.query
         and not parsed_origin.fragment
     )
-
-
-class TtsProviderError(RuntimeError):
-    pass
 
 
 def _synthesize_edge_tts_audio(text: str, voice: str, rate: int) -> bytes:
@@ -72,62 +79,79 @@ def _synthesize_edge_tts_audio(text: str, voice: str, rate: int) -> bytes:
         raise TtsProviderError(str(error)) from error
 
 
+@tts_api.get("/tts/health")
+async def tts_health():
+    return {"status": "ok"}
+
+
 @tts_api.post("/tts/synthesize")
-def synthesize_speech():
+async def synthesize_speech(
+    request: FastAPIRequest,
+    authorization: Optional[str] = Header(None),
+    origin: Optional[str] = Header(None),
+):
+    # Parse body manually / flexibly to support custom error messaging and status codes
+    try:
+        payload = await request.json()
+    except Exception:
+        return JSONResponse(status_code=400, content={"error": "Expected a JSON request body."})
+
+    if not isinstance(payload, dict):
+        return JSONResponse(status_code=400, content={"error": "Expected a JSON request body."})
+
     expected_token = os.environ.get("TTS_API_TOKEN", "")
-    supplied_token = request.headers.get("Authorization", "")
+    supplied_token = authorization or ""
+    
+    # Client IP resolution
+    client_ip = request.client.host if request.client else "127.0.0.1"
     is_local_client = (
-        request.remote_addr in {"127.0.0.1", "::1"}
-        and _is_loopback_origin(request.headers.get("Origin"))
+        client_ip in {"127.0.0.1", "::1"}
+        and _is_loopback_origin(origin)
     )
+
     if not is_local_client:
         if expected_token:
             if not hmac.compare_digest(
                 supplied_token,
                 f"Bearer {expected_token}",
             ):
-                return jsonify(error="Unauthorized TTS request."), 401
+                return JSONResponse(status_code=401, content={"error": "Unauthorized TTS request."})
         else:
             allowed_origins = {
-                origin.strip()
-                for origin in os.environ.get("TTS_ALLOWED_ORIGINS", "").split(",")
-                if origin.strip()
+                item.strip()
+                for item in os.environ.get("TTS_ALLOWED_ORIGINS", "").split(",")
+                if item.strip()
             }
-            if request.headers.get("Origin") not in allowed_origins:
-                return jsonify(error="A TTS access token is required."), 401
-
-    payload = request.get_json(silent=True)
-    if not isinstance(payload, dict):
-        return jsonify(error="Expected a JSON request body."), 400
+            if origin not in allowed_origins:
+                return JSONResponse(status_code=401, content={"error": "A TTS access token is required."})
 
     text = payload.get("text")
     voice = payload.get("voice", "fil-PH-BlessicaNeural")
     rate = payload.get("rate", 0)
+
     if not isinstance(text, str) or not text.strip():
-        return jsonify(error="Text must not be empty."), 400
+        return JSONResponse(status_code=400, content={"error": "Text must not be empty."})
     if len(text) > _MAX_TEXT_LENGTH:
-        return jsonify(error=f"Text must not exceed {_MAX_TEXT_LENGTH} characters."), 413
+        return JSONResponse(status_code=413, content={"error": f"Text must not exceed {_MAX_TEXT_LENGTH} characters."})
     if not isinstance(voice, str) or voice not in _ALLOWED_VOICES:
-        return jsonify(error="Unsupported Filipino voice."), 400
+        return JSONResponse(status_code=400, content={"error": "Unsupported Filipino voice."})
     if isinstance(rate, bool) or not isinstance(rate, int) or not -50 <= rate <= 50:
-        return jsonify(error="Rate must be an integer from -50 to 50."), 400
+        return JSONResponse(status_code=400, content={"error": "Rate must be an integer from -50 to 50."})
 
     speech_key = os.environ.get("AZURE_SPEECH_KEY", "")
     region = os.environ.get("AZURE_SPEECH_REGION", "")
+
     if not speech_key or not _REGION_PATTERN.fullmatch(region):
         try:
             audio = _synthesize_edge_tts_audio(text, voice, rate)
         except TtsProviderError as error:
-            current_app.logger.warning(
-                "Microsoft Edge TTS request failed: %s",
-                error,
-            )
-            return jsonify(error="The speech provider is currently unavailable."), 502
+            logger.warning("Microsoft Edge TTS request failed: %s", error)
+            return JSONResponse(status_code=502, content={"error": "The speech provider is currently unavailable."})
         if not audio:
-            return jsonify(error="The speech provider returned empty audio."), 502
+            return JSONResponse(status_code=502, content={"error": "The speech provider returned empty audio."})
         return Response(
-            audio,
-            mimetype="audio/mpeg",
+            content=audio,
+            media_type="audio/mpeg",
             headers={"Cache-Control": "no-store"},
         )
 
@@ -152,12 +176,12 @@ def synthesize_speech():
         with urlopen(upstream, timeout=20) as response:
             audio = response.read()
     except HTTPError as error:
-        current_app.logger.warning("Azure Speech returned HTTP %s", error.code)
-        return jsonify(error="The speech provider rejected the request."), 502
+        logger.warning("Azure Speech returned HTTP %s", error.code)
+        return JSONResponse(status_code=502, content={"error": "The speech provider rejected the request."})
     except (URLError, TimeoutError) as error:
-        current_app.logger.warning("Azure Speech request failed: %s", error)
-        return jsonify(error="The speech provider is currently unavailable."), 502
+        logger.warning("Azure Speech request failed: %s", error)
+        return JSONResponse(status_code=502, content={"error": "The speech provider is currently unavailable."})
 
     if not audio:
-        return jsonify(error="The speech provider returned empty audio."), 502
-    return Response(audio, mimetype="audio/mpeg", headers={"Cache-Control": "no-store"})
+        return JSONResponse(status_code=502, content={"error": "The speech provider returned empty audio."})
+    return Response(content=audio, media_type="audio/mpeg", headers={"Cache-Control": "no-store"})

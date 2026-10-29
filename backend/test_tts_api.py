@@ -1,18 +1,18 @@
-import json
 import os
 import unittest
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 
-from flask import Flask
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 
 from tts_api import tts_api
 
 
 class TtsApiTests(unittest.TestCase):
     def setUp(self):
-        self.app = Flask(__name__)
-        self.app.register_blueprint(tts_api)
-        self.client = self.app.test_client()
+        self.app = FastAPI()
+        self.app.include_router(tts_api)
+        self.client = TestClient(self.app, base_url="http://testserver")
         self.environment = patch.dict(
             os.environ,
             {
@@ -26,23 +26,29 @@ class TtsApiTests(unittest.TestCase):
     def tearDown(self):
         self.environment.stop()
 
+    def test_health_check(self):
+        response = self.client.get("/tts/health")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"status": "ok"})
+
     def test_rejects_requests_without_access_token(self):
-        response = self.client.post(
+        # Pass non-local client IP via client headers or custom client
+        client = TestClient(self.app, client=("192.0.2.25", 50000))
+        response = client.post(
             "/tts/synthesize",
             json={"text": "Kumusta"},
-            environ_base={"REMOTE_ADDR": "192.0.2.25"},
         )
-
         self.assertEqual(response.status_code, 401)
+
     def test_rejects_incorrect_access_token(self):
-        response = self.client.post(
+        client = TestClient(self.app, client=("192.0.2.25", 50000))
+        response = client.post(
             "/tts/synthesize",
             headers={"Authorization": "Bearer wrong-token"},
             json={"text": "Kumusta"},
-            environ_base={"REMOTE_ADDR": "192.0.2.25"},
         )
-
         self.assertEqual(response.status_code, 401)
+
     def test_allows_local_edge_tts_without_azure_credentials_or_client_token(self):
         with (
             patch.dict(
@@ -58,7 +64,8 @@ class TtsApiTests(unittest.TestCase):
                 return_value=b"edge-mp3",
             ) as synthesize,
         ):
-            response = self.client.post(
+            client = TestClient(self.app, client=("127.0.0.1", 50000))
+            response = client.post(
                 "/tts/synthesize",
                 json={
                     "text": "Kumusta",
@@ -68,8 +75,8 @@ class TtsApiTests(unittest.TestCase):
             )
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.mimetype, "audio/mpeg")
-        self.assertEqual(response.data, b"edge-mp3")
+        self.assertEqual(response.headers.get("content-type"), "audio/mpeg")
+        self.assertEqual(response.content, b"edge-mp3")
         synthesize.assert_called_once_with(
             "Kumusta",
             "fil-PH-BlessicaNeural",
@@ -78,22 +85,21 @@ class TtsApiTests(unittest.TestCase):
 
     def test_requires_token_for_nonlocal_clients_without_server_token(self):
         with patch.dict(os.environ, {"TTS_API_TOKEN": ""}):
-            response = self.client.post(
+            client = TestClient(self.app, client=("192.0.2.25", 50000))
+            response = client.post(
                 "/tts/synthesize",
                 json={"text": "Kumusta"},
-                environ_base={"REMOTE_ADDR": "192.0.2.25"},
             )
-
         self.assertEqual(response.status_code, 401)
 
     def test_rejects_cross_origin_requests_without_server_token(self):
         with patch.dict(os.environ, {"TTS_API_TOKEN": ""}):
-            response = self.client.post(
+            client = TestClient(self.app, client=("127.0.0.1", 50000))
+            response = client.post(
                 "/tts/synthesize",
                 headers={"Origin": "https://attacker.example"},
                 json={"text": "Kumusta"},
             )
-
         self.assertEqual(response.status_code, 401)
 
     def test_allows_configured_web_origin_without_client_token(self):
@@ -112,19 +118,20 @@ class TtsApiTests(unittest.TestCase):
                 return_value=b"edge-mp3",
             ),
         ):
-            response = self.client.post(
+            client = TestClient(self.app, client=("192.0.2.25", 50000))
+            response = client.post(
                 "/tts/synthesize",
                 headers={"Origin": "https://app.example.com"},
                 json={"text": "Kumusta"},
-                environ_base={"REMOTE_ADDR": "192.0.2.25"},
             )
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.data, b"edge-mp3")
+        self.assertEqual(response.content, b"edge-mp3")
 
     def test_rejects_unsupported_voice_without_calling_provider(self):
         with patch("tts_api.urlopen") as urlopen:
-            response = self.client.post(
+            client = TestClient(self.app, client=("127.0.0.1", 50000))
+            response = client.post(
                 "/tts/synthesize",
                 headers={"Authorization": "Bearer test-token"},
                 json={"text": "Kumusta", "voice": "en-US"},
@@ -134,10 +141,11 @@ class TtsApiTests(unittest.TestCase):
         urlopen.assert_not_called()
 
     def test_synthesizes_filipino_voice_as_mp3(self):
-        fake_response = unittest.mock.MagicMock()
+        fake_response = MagicMock()
         fake_response.__enter__.return_value.read.return_value = b"mp3-audio"
         with patch("tts_api.urlopen", return_value=fake_response) as urlopen:
-            response = self.client.post(
+            client = TestClient(self.app, client=("127.0.0.1", 50000))
+            response = client.post(
                 "/tts/synthesize",
                 headers={"Authorization": "Bearer test-token"},
                 json={
@@ -148,8 +156,8 @@ class TtsApiTests(unittest.TestCase):
             )
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.mimetype, "audio/mpeg")
-        self.assertEqual(response.data, b"mp3-audio")
+        self.assertEqual(response.headers.get("content-type"), "audio/mpeg")
+        self.assertEqual(response.content, b"mp3-audio")
         provider_request = urlopen.call_args.args[0]
         self.assertEqual(
             provider_request.get_header("Ocp-apim-subscription-key"),
@@ -173,7 +181,8 @@ class TtsApiTests(unittest.TestCase):
                 side_effect=TtsProviderError("provider unavailable"),
             ),
         ):
-            response = self.client.post(
+            client = TestClient(self.app, client=("127.0.0.1", 50000))
+            response = client.post(
                 "/tts/synthesize",
                 headers={"Authorization": "Bearer test-token"},
                 json={"text": "Kumusta"},
@@ -181,9 +190,10 @@ class TtsApiTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 502)
         self.assertEqual(
-            json.loads(response.data)["error"],
+            response.json()["error"],
             "The speech provider is currently unavailable.",
         )
+
 
 if __name__ == "__main__":
     unittest.main()

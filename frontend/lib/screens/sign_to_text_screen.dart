@@ -10,6 +10,7 @@ import '../services/database_helper.dart';
 import '../models/sign_result.dart';
 import '../widgets/camera_preview.dart';
 import '../widgets/prediction_overlay.dart';
+import '../widgets/signing_space_overlay.dart';
 import '../widgets/connectivity_badge.dart';
 
 const Color _kAppBlue = Color(0xFF0138FF);
@@ -26,6 +27,9 @@ class _SignToTextScreenState extends State<SignToTextScreen> {
   late CameraService _cameraService;
   late TtsService _ttsService;
   SignResult? _currentPrediction;
+  bool _isCheckingPermission = true;
+  bool _hasPermission = false;
+  bool _isPermanentlyDenied = false;
   bool _isCameraInitialized = false;
   bool _isModelReady = false;
   bool _isProcessingFrame = false;
@@ -50,7 +54,42 @@ class _SignToTextScreenState extends State<SignToTextScreen> {
         });
       }
     });
-    _initializeCamera();
+    _checkPermissionAndStart();
+  }
+
+  Future<void> _checkPermissionAndStart() async {
+    setState(() => _isCheckingPermission = true);
+    final hasPerm = await _cameraService.hasCameraPermission();
+    final isPermDenied = await _cameraService.isPermissionPermanentlyDenied();
+
+    if (mounted) {
+      setState(() {
+        _hasPermission = hasPerm;
+        _isPermanentlyDenied = isPermDenied;
+        _isCheckingPermission = false;
+      });
+    }
+
+    if (hasPerm) {
+      await _initializeCamera();
+    }
+  }
+
+  Future<void> _requestPermissionAndStart() async {
+    setState(() => _cameraError = null);
+    final granted = await _cameraService.requestCameraPermission();
+    final isPermDenied = await _cameraService.isPermissionPermanentlyDenied();
+
+    if (mounted) {
+      setState(() {
+        _hasPermission = granted;
+        _isPermanentlyDenied = isPermDenied;
+      });
+    }
+
+    if (granted) {
+      await _initializeCamera();
+    }
   }
 
   Future<void> _initializeCamera() async {
@@ -59,15 +98,29 @@ class _SignToTextScreenState extends State<SignToTextScreen> {
       await _recognitionProvider!.initialize();
       await _recognitionProvider!.start();
       _isModelReady = _recognitionProvider!.isModelReady;
-      _frameSubscription = _cameraService.frameStream.listen(
-        _processFrame,
-        onError: (Object error, StackTrace stackTrace) {
-          if (mounted) setState(() => _recognitionError = error.toString());
-        },
-      );
+
+      _restartFrameStream();
+
       if (mounted) {
         setState(() {
+          _hasPermission = true;
           _isCameraInitialized = true;
+          _cameraError = null;
+        });
+      }
+    } on CameraPermissionPermanentlyDeniedException catch (e) {
+      if (mounted) {
+        setState(() {
+          _hasPermission = false;
+          _isPermanentlyDenied = true;
+          _cameraError = e.message;
+        });
+      }
+    } on CameraPermissionDeniedException catch (_) {
+      if (mounted) {
+        setState(() {
+          _hasPermission = false;
+          _isPermanentlyDenied = false;
           _cameraError = null;
         });
       }
@@ -78,6 +131,111 @@ class _SignToTextScreenState extends State<SignToTextScreen> {
         });
       }
     }
+  }
+
+  void _restartFrameStream() {
+    _frameSubscription?.cancel();
+    _frameSubscription = _cameraService.frameStream.listen(
+      _processFrame,
+      onError: (Object error, StackTrace stackTrace) {
+        if (mounted) setState(() => _recognitionError = error.toString());
+      },
+    );
+  }
+
+  Future<void> _switchCamera() async {
+    try {
+      await _cameraService.switchCamera();
+      _restartFrameStream();
+      if (mounted) {
+        final currentCam = _cameraService.selectedCamera;
+        final name = currentCam != null
+            ? CameraService.getCameraDisplayName(currentCam, 0)
+            : 'Camera';
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Switched to: $name'),
+            duration: const Duration(milliseconds: 900),
+          ),
+        );
+        setState(() {});
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not switch camera: $e')),
+        );
+      }
+    }
+  }
+
+  void _showCameraPicker() {
+    final cameras = _cameraService.availableCamerasList;
+    if (cameras.length <= 2) {
+      _switchCamera();
+      return;
+    }
+
+    showModalBottomSheet(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (context) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+                  child: Text(
+                    'Select Camera',
+                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                          fontWeight: FontWeight.bold,
+                        ),
+                  ),
+                ),
+                const Divider(),
+                ...cameras.asMap().entries.map((entry) {
+                  final index = entry.key;
+                  final cam = entry.value;
+                  final isSelected = cam == _cameraService.selectedCamera;
+                  return ListTile(
+                    leading: Icon(
+                      cam.lensDirection == CameraLensDirection.front
+                          ? Icons.camera_front_rounded
+                          : cam.lensDirection == CameraLensDirection.back
+                              ? Icons.camera_rear_rounded
+                              : Icons.videocam_rounded,
+                      color: isSelected ? _kAppBlue : null,
+                    ),
+                    title: Text(
+                      CameraService.getCameraDisplayName(cam, index),
+                      style: TextStyle(
+                        fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                        color: isSelected ? _kAppBlue : null,
+                      ),
+                    ),
+                    trailing: isSelected
+                        ? const Icon(Icons.check_circle_rounded, color: _kAppBlue)
+                        : null,
+                    onTap: () async {
+                      Navigator.of(context).pop();
+                      await _cameraService.selectCamera(cam);
+                      _restartFrameStream();
+                      if (mounted) setState(() {});
+                    },
+                  );
+                }),
+              ],
+            ),
+          ),
+        );
+      },
+    );
   }
 
   void _processFrame(CameraImage image) {
@@ -200,21 +358,214 @@ class _SignToTextScreenState extends State<SignToTextScreen> {
             ),
           ],
         ),
-        actions: const [
-          ConnectivityBadge(),
-          SizedBox(width: 14),
+        actions: [
+          if (_isCameraInitialized && _cameraService.canSwitchCamera)
+            IconButton(
+              icon: const Icon(Icons.cameraswitch_rounded),
+              tooltip: 'Switch Camera',
+              onPressed: _showCameraPicker,
+            ),
+          const ConnectivityBadge(),
+          const SizedBox(width: 14),
         ],
       ),
-      body: _cameraError != null
-          ? _buildErrorState()
-          : !_isCameraInitialized
-          ? const Center(child: CircularProgressIndicator())
-          : _buildCameraView(),
+      body: _buildBody(),
+    );
+  }
+
+  Widget _buildBody() {
+    if (_isCheckingPermission) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    if (!_hasPermission) {
+      return _buildPermissionRequestView();
+    }
+
+    if (_cameraError != null) {
+      return _buildErrorState();
+    }
+
+    if (!_isCameraInitialized) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    return _buildCameraView();
+  }
+
+  Widget _buildPermissionRequestView() {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+
+    return Center(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 32),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(24),
+          child: BackdropFilter(
+            filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
+            child: Container(
+              padding: const EdgeInsets.all(28),
+              decoration: BoxDecoration(
+                color: isDark
+                    ? const Color(0xFF0C1220).withValues(alpha: 0.85)
+                    : Colors.white.withValues(alpha: 0.90),
+                borderRadius: BorderRadius.circular(24),
+                border: Border.all(
+                  color: isDark
+                      ? Colors.white.withValues(alpha: 0.16)
+                      : Colors.white.withValues(alpha: 0.80),
+                  width: 1.5,
+                ),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.15),
+                    blurRadius: 20,
+                    offset: const Offset(0, 6),
+                  ),
+                ],
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    width: 76,
+                    height: 76,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: _kAppBlue.withValues(alpha: 0.12),
+                      border: Border.all(
+                        color: _kAppBlue.withValues(alpha: 0.4),
+                        width: 2,
+                      ),
+                    ),
+                    child: const Icon(
+                      Icons.videocam_rounded,
+                      size: 40,
+                      color: _kAppBlue,
+                    ),
+                  ),
+                  const SizedBox(height: 20),
+                  Text(
+                    'Camera Access Required',
+                    style: theme.textTheme.headlineSmall?.copyWith(
+                      fontWeight: FontWeight.w900,
+                      letterSpacing: -0.5,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 12),
+                  Text(
+                    'TinigSenyas needs your camera permission to recognize hand gestures from left to right and translate Filipino Sign Language (FSL) in real-time.',
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B),
+                      height: 1.5,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 22),
+                  _buildFeatureBullet(
+                    Icons.pan_tool_rounded,
+                    'Recognizes both hands across horizontal signing space',
+                  ),
+                  const SizedBox(height: 10),
+                  _buildFeatureBullet(
+                    Icons.cameraswitch_rounded,
+                    'Compatible with all cameras: Front, Back & USB Webcams',
+                  ),
+                  const SizedBox(height: 10),
+                  _buildFeatureBullet(
+                    Icons.lock_outline_rounded,
+                    'Private: Frames are processed locally on your device',
+                  ),
+                  const SizedBox(height: 28),
+                  if (_isPermanentlyDenied) ...[
+                    Text(
+                      'Camera permission is permanently denied in system settings.',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.error,
+                        fontWeight: FontWeight.w600,
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                    const SizedBox(height: 12),
+                    ElevatedButton.icon(
+                      onPressed: () async => await _cameraService.openSettings(),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: _kAppBlue,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                        elevation: 2,
+                      ),
+                      icon: const Icon(Icons.settings_rounded),
+                      label: const Text(
+                        'Open App Settings',
+                        style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    TextButton(
+                      onPressed: _checkPermissionAndStart,
+                      child: const Text('I have allowed permission (Check again)'),
+                    ),
+                  ] else ...[
+                    ElevatedButton.icon(
+                      onPressed: _requestPermissionAndStart,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: _kAppBlue,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 14),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                        elevation: 2,
+                      ),
+                      icon: const Icon(Icons.check_circle_outline_rounded),
+                      label: const Text(
+                        'Allow Camera Access',
+                        style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildFeatureBullet(IconData icon, String text) {
+    return Row(
+      children: [
+        Container(
+          padding: const EdgeInsets.all(6),
+          decoration: BoxDecoration(
+            color: _kAppYellow.withValues(alpha: 0.2),
+            shape: BoxShape.circle,
+          ),
+          child: Icon(icon, size: 16, color: const Color(0xFFD97706)),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Text(
+            text,
+            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500),
+          ),
+        ),
+      ],
     );
   }
 
   Widget _buildErrorState() {
     final theme = Theme.of(context);
+    final isPermIssue = _isPermanentlyDenied ||
+        (_cameraError != null && _cameraError!.toLowerCase().contains('permission'));
+
     return Center(
       child: Padding(
         padding: const EdgeInsets.all(24),
@@ -223,14 +574,25 @@ class _SignToTextScreenState extends State<SignToTextScreen> {
           children: [
             Icon(Icons.error_outline_rounded, size: 56, color: theme.colorScheme.error),
             const SizedBox(height: 16),
-            Text('Camera Error', style: theme.textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w800)),
+            Text(
+              isPermIssue ? 'Camera Permission Issue' : 'Camera Error',
+              style: theme.textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w800),
+            ),
             const SizedBox(height: 8),
             Text(
-              _cameraError!,
+              _cameraError ?? 'Unable to connect to camera.',
               style: theme.textTheme.bodyMedium,
               textAlign: TextAlign.center,
             ),
             const SizedBox(height: 24),
+            if (isPermIssue) ...[
+              ElevatedButton.icon(
+                onPressed: () async => await _cameraService.openSettings(),
+                icon: const Icon(Icons.settings_rounded),
+                label: const Text('Open System Settings'),
+              ),
+              const SizedBox(height: 10),
+            ],
             ElevatedButton.icon(
               onPressed: _initializeCamera,
               icon: const Icon(Icons.refresh_rounded),
@@ -250,6 +612,7 @@ class _SignToTextScreenState extends State<SignToTextScreen> {
           cameraService: _cameraService,
           overlay: PredictionOverlay(prediction: _currentPrediction, top: 72),
         ),
+        const SigningSpaceOverlay(),
         Positioned(
           top: 100,
           left: 16,
@@ -450,6 +813,35 @@ class _SignToTextScreenState extends State<SignToTextScreen> {
                   ),
                 ),
               ),
+              if (_cameraService.canSwitchCamera) ...[
+                const SizedBox(width: 8),
+                InkWell(
+                  onTap: _showCameraPicker,
+                  borderRadius: BorderRadius.circular(8),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: _kAppBlue.withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: const Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.cameraswitch_rounded, size: 14, color: _kAppBlue),
+                        SizedBox(width: 4),
+                        Text(
+                          'Switch',
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.bold,
+                            color: _kAppBlue,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
             ],
           ),
         ),
